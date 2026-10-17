@@ -2,6 +2,8 @@
 
 A fast, standalone Rust plugin for discovering projects, managing roots and favorites, and creating Herdr workspaces. It runs in a session-modal Herdr popup, with no Python, Node, or package manager needed **at launch**. Git repositories and ordinary folders are both searchable; results show full paths to distinguish duplicate names.
 
+[Watch the demo](docs/workspaces-manager-demo.mp4) — search projects, switch scopes, manage favorites, and create workspaces in an isolated sample filesystem.
+
 ## Install
 
 Requires Herdr 0.9.3+. Install from the public GitHub repository:
