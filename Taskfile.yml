@@ -1,0 +1,20 @@
+version: '3'
+
+tasks:
+  build:
+    desc: Compile the standalone plugin binary
+    cmds: [cargo build --release --locked]
+  check:
+    cmds: [cargo fmt --all -- --check, cargo clippy --all-targets -- -D warnings]
+  format:
+    cmds: [cargo fmt --all]
+  release-check:
+    desc: Check formatting, Clippy, and the release build before tagging
+    deps: [check, build]
+  link:
+    deps: [build]
+    cmds:
+      - 'herdr plugin link "{{.ROOT_DIR}}"'
+  picker:
+    deps: [build]
+    cmds: [./target/release/herdr-workspaces-manager]

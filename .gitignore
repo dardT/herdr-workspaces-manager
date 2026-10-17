@@ -1,0 +1,7 @@
+# Rust build artifacts
+target/
+bin/
+
+# Local editor and environment files
+.env
+.DS_Store

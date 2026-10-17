@@ -1,0 +1,23 @@
+id = "herdr-workspaces-manager"
+name = "Workspaces manager"
+version = "0.1.0"
+min_herdr_version = "0.9.3"
+description = "Discover local projects, manage roots and favorites, and create distinct Herdr workspaces"
+platforms = ["macos", "linux"]
+
+[[build]]
+command = ["bash", "herdr/install.sh"]
+
+[[actions]]
+id = "open"
+title = "Open workspaces manager"
+contexts = ["workspace"]
+command = ["sh", "launch.sh"]
+
+[[panes]]
+id = "picker"
+title = "Workspaces"
+placement = "popup"
+width = "85%"
+height = "85%"
+command = ["sh", "herdr/run.sh"]
