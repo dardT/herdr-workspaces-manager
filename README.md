@@ -1,81 +1,112 @@
 # Herdr workspaces manager
 
-A fast, standalone Rust plugin for discovering projects, managing roots and favorites, and creating Herdr workspaces. It runs in a session-modal Herdr popup, with no Python, Node, or package manager needed **at launch**. Git repositories and ordinary folders are both searchable; results show full paths to distinguish duplicate names.
+Find project directories, organize favorites and search roots, and create Herdr workspaces from a fast, standalone Rust picker. Git repositories and ordinary folders are both searchable; full paths make duplicate names easy to distinguish. The plugin opens in a Herdr popup and needs no Python, Node, or package manager at launch.
 
-[Watch the demo](docs/workspaces-manager-demo.mp4) — search projects, switch scopes, manage favorites, and create workspaces in an isolated sample filesystem.
+[![Workspaces manager demo showing search, favorites, root scopes, and batch creation](docs/workspaces-manager-demo.gif)](docs/workspaces-manager-demo.mp4)
 
-## Install
+*Animated preview — click to open the full video.*
 
-Requires Herdr 0.9.3+. Install from the public GitHub repository:
+## Get started
 
-```sh
-herdr plugin install dardT/herdr-workspaces-manager
-```
+Requires **Herdr 0.9.3+** on macOS or Linux.
 
-The install hook downloads the platform-specific binary from the matching GitHub release, verifies its SHA-256 checksum **before extraction**, and installs it into Herdr's plugin checkout. Precompiled binaries are published for macOS (Apple Silicon and Intel) and Linux (x86-64 and ARM64); no Rust, Python, Node, or package manager is required on those systems when the release assets are available. If an asset is unavailable or the platform is unsupported, installation falls back to a Rust/Cargo source build. A checksum mismatch aborts installation rather than running an unverified binary. The release repository is fixed as a fallback for source archives lacking Git metadata; `HERDR_WORKSPACES_MANAGER_REPO=OWNER/REPO` overrides it for forks.
+1. Install the plugin:
 
-For local development, Rust/Cargo is required. Run `task link` once: it builds the release binary and links the plugin to Herdr. After code changes, run `task build` again. Linking a local plugin does not run its manifest build step automatically; the pane launcher uses `target/release/herdr-workspaces-manager` for local builds.
+   ```sh
+   herdr plugin install dardT/herdr-workspaces-manager
+   ```
 
-Bind the picker in `~/.config/herdr/config.toml` and reload Herdr's configuration:
+2. Open the picker from a Herdr workspace:
 
-```toml
-[[keys.command]]
-key = "prefix+shift+o"
-type = "plugin_action"
-command = "herdr-workspaces-manager.open"
-description = "Find projects and create workspaces"
-```
+   ```sh
+   herdr plugin action invoke --plugin herdr-workspaces-manager open
+   ```
 
-`prefix+shift+o` is Ctrl+B, then Shift+O with Herdr's default prefix; change `key` to any supported Herdr binding. Reload the running server with `herdr server reload-config`. Alternatively, run `herdr plugin action invoke --plugin herdr-workspaces-manager open`.
+3. **Strongly recommended:** add a shortcut to `~/.config/herdr/config.toml` so you can open the picker directly in Herdr without typing the CLI command each time:
 
-## Picker controls
+   ```toml
+   [[keys.command]]
+   key = "prefix+shift+o"
+   type = "plugin_action"
+   command = "herdr-workspaces-manager.open"
+   description = "Find projects and create workspaces"
+   ```
 
-The initial **All** scope searches project directories throughout your home directory, regardless of configured roots, but skips macOS's `~/Library` for responsiveness. A configured root inside `~/Library` remains searchable in its own scope. The first scan may take longer than a single-root scan; results appear when background discovery finishes. Click a scope label, press Ctrl+G to cycle forward, or press Ctrl+Shift+G to cycle backward through All, Favorites, and each configured root individually. Root labels keep the same order when the active scope changes. Type to fuzzy-filter paths and names; matching paths are always ordered by directory depth (shallowest first), then alphabetically by full path. Use Up/Down, the mouse wheel, or click a row to highlight it. **Tab** browses only the highlighted directory's subfolders; **Shift+Tab** browses the current directory's parent (stopping at your home directory during home-based browsing). Entering or leaving a directory clears the query. Ctrl+G exits directory browsing to All. Search supports shell-like caret editing: Ctrl+A/E moves to the beginning/end, Ctrl+B or Left moves left, Right moves right, Ctrl+U/K deletes before/after the caret, and Ctrl+W deletes the previous word. Home, End, Backspace and Delete also work; long searches scroll to keep the caret visible. Ctrl+F remains the favorite toggle, **not** caret-right (use Right); Herdr's Ctrl+B prefix may intercept caret-left, so Left is always available. A click only highlights—it does not create a workspace.
+   Run `herdr server reload-config` after editing the file. With Herdr's default prefix, `prefix+shift+o` means **Ctrl+B**, then **Shift+O**. The opening shortcut is separate from the picker shortcuts below.
 
-- **Enter** with no pending selection creates the highlighted project's workspace and exits.
-- **Shift+Enter** toggles the highlighted project in the pending batch. **Ctrl+T** is the fallback when the outer terminal cannot report modified Enter distinctly.
-- **Enter** with pending selections opens a compact, scrollable review of **only** those selected paths. Use Up/Down or click a row, then Delete/Backspace (or Shift+Enter/Ctrl+T) to remove a mistake; Enter creates the remaining workspaces, and Esc returns to the picker to add more. If the batch becomes empty, the review closes. The review's create/remove/back labels are clickable.
-- **Esc** in the picker closes it without creating anything.
-- **?** (shown as `? Shortcuts` in the footer) opens an overlay listing the active, configurable picker bindings. Esc or ? returns to the picker; the footer hint is also clickable.
-- Result rows display a bold amber **★** for favorites and a bold blue **⌂** for paths that exactly match configured roots; both symbols remain colored on the highlighted row and appear together when applicable. A configured-root scope includes its root directory as a selectable row, while Tab-browsing shows only descendants. Ctrl+F toggles the highlighted favorite; in Favorites, a removed item stays highlighted temporarily so Ctrl+F immediately restores it. It disappears on the next search or scope change if not restored. After filtering and highlighting a project (for example, searching `sandbox` and highlighting `~/ZedProjects/pi-sandbox`), Ctrl+R adds that project's **full path** as a peer root, without changing the active scope. To add a directory not shown in the results, put its full path in `config.json` under `roots`. Adding a root does not rescan All, since All already searches your home directory; configured roots are narrower scopes (and can also target paths outside your home directory). Ctrl+Shift+R removes a highlighted configured root immediately (including from All or Favorites), so it can undo Ctrl+R without changing scope. If no root is highlighted but a root scope is active, a small confirmation offers to remove that scope's root. Root management uses the keyboard shortcuts or `config.json`; the root action buttons are not shown. Ctrl+Shift+R requires a terminal that reports Shift separately.
+## Use the picker
 
-New workspaces are always created, even when that exact path is already open. They stay unfocused by default. Names use the shortest path suffix that distinguishes currently open workspaces; repeated identical paths receive `#1`, `#2`, and so on. Existing workspace labels are changed only when the new workspace makes their prior shortest suffix ambiguous.
+### Find a project
+
+The picker starts in **All**, which discovers directories under your home directory. Type to fuzzy-search names and paths; results are ordered by directory depth (shallowest first), then full path. Use **Up/Down**, the mouse wheel, or a click to highlight a row. Clicking a row only highlights it; it does not create a workspace.
+
+Switch between **All**, **Favorites**, and each configured root with **Ctrl+G** (forward), **Ctrl+Shift+G** (backward), or a click on a scope label. Each root is a narrower search scope and can point outside your home directory. Favorites form their own scope rather than being inserted into other scopes. Scope labels keep a stable order.
+
+A **★** marks a favorite; a **⌂** marks a directory that exactly matches a configured root. Both can appear on the same row.
+
+### Organize favorites and roots
+
+| Action | Shortcut |
+| --- | --- |
+| Toggle the highlighted directory as a favorite | **Ctrl+F** |
+| Add the highlighted directory's full path as a root | **Ctrl+R** |
+| Remove a highlighted configured root | **Ctrl+Shift+R** |
+
+Adding a root does not change the active scope or rescan All. To add a directory that is not in the results, add its full path to `roots` in [the plugin configuration](#configuration). Removing a highlighted root works from any scope; if you are in a root scope but have highlighted a different directory, removal asks for confirmation. In Favorites, a removed favorite remains highlighted briefly so **Ctrl+F** can immediately restore it.
+
+Some terminals cannot report **Ctrl+Shift+R** distinctly. In that case, edit `roots` in the configuration file.
+
+### Create workspaces
+
+- Press **Enter** to create a workspace for the highlighted directory and close the picker.
+- Press **Shift+Enter** to add or remove a directory from a pending batch. Use **Ctrl+T** if your terminal does not distinguish Shift+Enter.
+- With a batch pending, press **Enter** to review only the selected paths. Remove a mistake with **Delete/Backspace** (or Shift+Enter/Ctrl+T), press **Esc** to return and select more, or press **Enter** again to create the remaining workspaces.
+
+Each selection creates a new workspace, even if that path is already open. Created workspaces stay unfocused by default. Labels use the shortest suffix that distinguishes open paths; repeated identical paths receive `#1`, `#2`, and so on. Existing labels change only when a new workspace makes them ambiguous.
+
+### Browse and edit
+
+| Action | Shortcut |
+| --- | --- |
+| Browse the highlighted directory's subfolders | **Tab** |
+| Browse the current directory's parent | **Shift+Tab** |
+| Leave directory browsing for All | **Ctrl+G** |
+| Show configurable shortcuts | **?** |
+| Close the picker or return from review/help | **Esc** |
+
+Entering or leaving a directory clears the search. Tab shows descendants only; Shift+Tab stops at your home directory when browsing from home. The help overlay is also available through the `? Shortcuts` footer hint.
+
+Search supports shell-style editing: **Ctrl+A/E** moves to the start/end; **Ctrl+U/K** deletes before/after the caret; **Ctrl+W** deletes the previous word. Arrow keys, Home, End, Backspace, and Delete also work. **Left** is the reliable way to move the caret left if Herdr intercepts **Ctrl+B** as its prefix. **Ctrl+F** always toggles a favorite, not caret-right.
 
 ## Configuration
 
-The configuration lives at `$(herdr plugin config-dir herdr-workspaces-manager)/config.json`. It is created on first picker launch and can be edited manually. Existing `~/ZedProjects` and `~/PycharmProjects` directories are added as initial roots when present. Example:
+The plugin creates `config.json` on first launch. Find its directory with:
+
+```sh
+herdr plugin config-dir herdr-workspaces-manager
+```
+
+For example, edit `$(herdr plugin config-dir herdr-workspaces-manager)/config.json` to set roots and favorites:
 
 ```json
 {
   "roots": ["~/ZedProjects", "~/PycharmProjects"],
   "favorites": ["~/ZedProjects/special-project"],
   "max_depth": 20,
-  "focus_created": false,
-  "keybindings": {
-    "select": "shift+enter,ctrl+t",
-    "scope": "ctrl+g",
-    "scope_backward": "ctrl+shift+g",
-    "enter_directory": "tab",
-    "parent_directory": "shift+tab",
-    "favorite": "ctrl+f",
-    "add_root": "ctrl+r",
-    "remove_root": "ctrl+shift+r",
-    "help": "?"
-  },
-  "excluded_names": [".*", "node_modules", "vendor", "target", "dist", "build", ".venv", "venv", "__pycache__", ".next", "coverage", "site-packages"]
+  "focus_created": false
 }
 ```
 
-Roots and favorites can also be changed inside the picker. Existing configs receive the new scope-navigation bindings automatically; configs using the old generated `ctrl+d` removal binding are also migrated when the picker next opens. Herdr's opening shortcut is configured separately in `[keys]`; the picker shortcuts above are comma-separated key chords. Enter creates or opens an editable batch review; Esc returns to the picker from a review or closes the picker itself. Discovery searches at most 20 levels deep by default, honors applicable `.gitignore`/global Git ignore rules, prunes hidden folders and configured artifact names, and does not follow directory symlinks. Favorites appear in their own scope, including paths outside your home directory; they are not injected into other scopes. Discovery runs in the background; at most 1,000 fuzzy matches are displayed at once. The plugin acts on the **local** Herdr session.
+Existing `~/ZedProjects` and `~/PycharmProjects` directories become initial roots when present. Other defaults include a 20-level discovery limit and exclusion of hidden folders and common build/dependency directories (`node_modules`, `target`, `.venv`, and others). You can override those exclusions with `excluded_names` and the picker shortcuts with `keybindings`; press **?** in the picker to see the active bindings. Existing configurations automatically gain missing scope/browsing bindings, and the old generated `ctrl+d` root-removal binding is migrated to `ctrl+shift+r`.
 
-## Development
+### How discovery works
 
-Run `task check` for formatting and Clippy, `task build` to compile the release binary, or `task release-check` for both before tagging. No runtime dependency manager is used.
+All searches your home directory but skips macOS's `~/Library` for responsiveness; an explicitly configured root inside `~/Library` remains searchable. Discovery runs in the background and respects applicable `.gitignore` and global Git ignore rules. It prunes hidden folders and excluded names, does not follow directory symlinks, and displays at most 1,000 fuzzy matches at once. Favorites may include paths outside your home directory. Workspace creation acts on the **local** Herdr session.
 
-## Releases
+## Installation details and development
 
-Set the same version in `Cargo.toml` and `herdr-plugin.toml`, then push a tag such as `v0.1.0`. `.github/workflows/release.yml` rejects a tag that does not match both files. It builds four native target binaries, packages each as `herdr-workspaces-manager-v<version>-<target>.tar.gz` with a `.sha256` companion, and publishes the assets to the GitHub release only when all builds succeed. The workflow can also be dispatched manually against an existing version tag. `target/` and installed `bin/` binaries are not committed.
+The installer downloads a matching release binary for macOS (Apple Silicon or Intel) or Linux (x86-64 or ARM64) and checks its SHA-256 checksum **before** extraction. An unavailable asset or unsupported platform falls back to a Rust/Cargo source build; a checksum mismatch stops installation. Forks can override the release repository with `HERDR_WORKSPACES_MANAGER_REPO=OWNER/REPO`.
 
-## Herdr marketplace
+For local development, Rust/Cargo is required. Run `task link` to build a release binary and link this checkout to Herdr; after code changes, run `task build` again. The local launcher prefers `target/release/herdr-workspaces-manager` over an installed `bin/` copy. Use `task check` for formatting and Clippy, or `task release-check` for both checks and a release build.
 
-The [Herdr plugin marketplace](https://herdr.dev/plugins/) automatically indexes public GitHub repositories whose default branch contains a valid `herdr-plugin.toml` and has the `herdr-plugin` GitHub topic. No separate submission is needed; the index refreshes about every 30 minutes. Marketplace listings are community-contributed, not endorsed or security-reviewed by Herdr. Installation remains `herdr plugin install dardT/herdr-workspaces-manager`.
+To publish a release, keep the version in `Cargo.toml` and `herdr-plugin.toml` in sync and push a tag such as `v0.1.0`. The release workflow validates the tag, builds four native binaries, and publishes each archive with a `.sha256` companion. `target/` and installed `bin/` binaries are not committed.
