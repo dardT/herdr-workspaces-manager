@@ -38,7 +38,6 @@ enum Mode {
     Picker,
     BatchReview,
     RootConfirm,
-    RootInput,
     Help,
 }
 
@@ -57,7 +56,6 @@ struct App {
     mode: Mode,
     query: String,
     query_caret: usize,
-    root_input: String,
     projects: Vec<Project>,
     results: Vec<usize>,
     pending: BTreeSet<PathBuf>,
@@ -91,7 +89,6 @@ impl App {
             mode: Mode::Picker,
             query: String::new(),
             query_caret: 0,
-            root_input: String::new(),
             projects: Vec::new(),
             results: Vec::new(),
             pending: BTreeSet::new(),
@@ -566,10 +563,7 @@ impl App {
     fn add_root_path(&mut self, path: &Path) {
         let path = config::normalize(path);
         if !path.is_dir() {
-            self.status = format!(
-                "Not a directory: {} · use a full path with + Root",
-                path.display()
-            );
+            self.status = format!("Not a directory: {}", path.display());
             return;
         }
         if self
@@ -600,20 +594,7 @@ impl App {
         if let Some(path) = self.selected_path() {
             self.add_root_path(&path);
         } else {
-            self.status =
-                "Highlight a project before pressing Ctrl+R; use + Root for a path".into();
-        }
-    }
-
-    fn add_root_from_input(&mut self) {
-        let input = self.root_input.trim().to_owned();
-        self.mode = Mode::Picker;
-        self.root_input.clear();
-        if input.is_empty() {
-            self.status =
-                "Enter a full directory path, or highlight a project and press Ctrl+R".into();
-        } else {
-            self.add_root_path(Path::new(&input));
+            self.status = "Highlight a directory before pressing Ctrl+R".into();
         }
     }
 
@@ -678,25 +659,6 @@ impl App {
                 KeyCode::Esc => {
                     self.root_to_remove = None;
                     self.mode = Mode::Picker;
-                }
-                _ => {}
-            }
-            return;
-        }
-        if self.mode == Mode::RootInput {
-            match key.code {
-                KeyCode::Enter => self.add_root_from_input(),
-                KeyCode::Esc => {
-                    self.mode = Mode::Picker;
-                    self.root_input.clear();
-                }
-                KeyCode::Backspace => {
-                    self.root_input.pop();
-                }
-                KeyCode::Char(character)
-                    if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
-                {
-                    self.root_input.push(character);
                 }
                 _ => {}
             }
@@ -841,11 +803,8 @@ impl App {
                     .iter()
                     .find(|(rect, _)| contains(*rect, mouse.column, mouse.row))
                 {
-                    match *action {
-                        "root" => self.mode = Mode::RootInput,
-                        "remove" => self.remove_root(),
-                        "favorite" => self.favorite(),
-                        _ => {}
+                    if *action == "favorite" {
+                        self.favorite();
                     }
                     return;
                 }
@@ -943,23 +902,15 @@ impl App {
             self.scope_buttons.push((rect, scope));
             root_x += width + 1;
         }
-        x = sections[1].x;
-        for (text, action) in [
-            ("+ Root", "root"),
-            ("− Root", "remove"),
-            ("★ Favorite", "favorite"),
-        ] {
-            let width = u16::try_from(text.chars().count() + 2).unwrap_or(u16::MAX);
-            if x.saturating_add(width) > sections[1].right() {
-                break;
-            }
-            let rect = Rect::new(x, sections[1].y + 3, width, 1);
+        let text = "★ Favorite";
+        let width = u16::try_from(text.chars().count() + 2).unwrap_or(u16::MAX);
+        if sections[1].x.saturating_add(width) <= sections[1].right() {
+            let rect = Rect::new(sections[1].x, sections[1].y + 3, width, 1);
             frame.render_widget(
                 Paragraph::new(format!(" {text} ")).style(Style::default().fg(Color::Yellow)),
                 rect,
             );
-            self.action_buttons.push((rect, action));
-            x += width + 1;
+            self.action_buttons.push((rect, "favorite"));
         }
         let (search, caret) = self.search_line(sections[2].width.saturating_sub(2));
         frame.render_widget(
@@ -1089,7 +1040,6 @@ impl App {
                      {}        Previous search scope\n\
                      {}        Toggle favorite\n\
                      {}        Add highlighted project as a root\n\
-                     + Root (mouse)        Enter a full directory path\n\
                      {}        Remove highlighted root; confirm active root otherwise\n\
                      {}        Show / hide shortcuts\n\
                      Esc                   Back from overlay or review; close picker\n\n\
@@ -1206,18 +1156,6 @@ impl App {
                     self.dialog_buttons.push((rect, action));
                     x = x.saturating_add(width);
                 }
-            }
-            Mode::RootInput => {
-                let area = centered(frame.area(), 75, 25);
-                frame.render_widget(Clear, area);
-                frame.render_widget(
-                    Paragraph::new(format!(
-                        "Add root by full directory path (e.g. ~/ZedProjects/pi-sandbox)\n\n{}▏\n\nEnter: add   Esc: back",
-                        self.root_input
-                    ))
-                    .block(Block::default().borders(Borders::ALL)),
-                    area,
-                );
             }
         }
     }
