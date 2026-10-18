@@ -18,3 +18,7 @@ tasks:
   picker:
     deps: [build]
     cmds: [./target/release/herdr-workspaces-manager]
+  demo:record:
+    desc: Regenerate the demo video and GIF in a disposable Herdr session
+    deps: [build]
+    cmds: [uv run --script scripts/record_demo.py]
