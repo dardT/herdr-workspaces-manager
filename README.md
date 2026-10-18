@@ -22,7 +22,7 @@ Requires **Herdr 0.9.3+** on macOS or Linux.
    herdr plugin action invoke open --plugin herdr-workspaces-manager
    ```
 
-3. **Strongly recommended:** add a shortcut to `~/.config/herdr/config.toml` so you can open the picker directly in Herdr without typing the CLI command each time:
+3. **Recommended:** open `~/.config/herdr/config.toml` in your editor and add a shortcut to open the picker:
 
    ```toml
    [[keys.command]]
@@ -32,7 +32,7 @@ Requires **Herdr 0.9.3+** on macOS or Linux.
    description = "Find projects and open workspaces or panes"
    ```
 
-   Run `herdr server reload-config` after editing the file. With Herdr's default prefix, `prefix+shift+o` means **Ctrl+B**, then **Shift+O**. The opening shortcut is separate from the picker shortcuts below.
+   Apply it with `herdr server reload-config`. With the default prefix, press **Ctrl+B**, then **Shift+O**. This opens the picker; its internal shortcuts are listed below.
 
 ## Use the picker
 
@@ -46,15 +46,7 @@ A **★** marks a favorite; a **⌂** marks a directory that exactly matches a c
 
 ### Organize favorites and roots
 
-| Action | Shortcut |
-| --- | --- |
-| Toggle the highlighted directory as a favorite | **Ctrl+F** |
-| Add the highlighted directory's full path as a root | **Ctrl+R** |
-| Remove a highlighted configured root | **Ctrl+Shift+R** |
-
-Adding a root does not change the active scope or rescan All. To add a directory that is not in the results, add its full path to `roots` in [the plugin configuration](#configuration). Removing a highlighted root works from any scope; if you are in a root scope but have highlighted a different directory, removal asks for confirmation. In Favorites, a removed favorite remains highlighted briefly so **Ctrl+F** can immediately restore it.
-
-Some terminals cannot report **Ctrl+Shift+R** distinctly. In that case, edit `roots` in the configuration file.
+Toggle favorites or add and remove search roots using the [shortcuts below](#shortcuts). Adding a root does not change the active scope. To add a directory not shown in the results, put its path in `roots` in [the plugin configuration](#configuration). Removing the active root while another directory is highlighted asks for confirmation. In Favorites, a removed favorite remains highlighted briefly so it can be restored. If your terminal cannot distinguish Ctrl+Shift+R, edit `roots` directly.
 
 ### Open projects
 
@@ -69,43 +61,48 @@ Each workspace selection creates a new workspace, even if that path is already o
 
 Successfully opened project paths are added to Recent, with repeated paths moved to the top; the latest 30 distinct paths are kept across picker sessions. Partial batches record projects opened before a failure. Created workspaces stay unfocused by default. Workspace labels use the shortest suffix that distinguishes open paths; repeated identical paths receive `#1`, `#2`, and so on. Existing labels change only when a new workspace makes them ambiguous.
 
-### Browse and edit
+### Shortcuts
 
-| Action | Shortcut |
-| --- | --- |
-| Browse the highlighted directory's subfolders | **Tab** |
-| Browse the current directory's parent | **Shift+Tab** |
-| Leave directory browsing for All | **Ctrl+G** |
-| Show configurable shortcuts | **?** |
-| Close the picker or return from review/help | **Esc** |
+| Action | Keys | Config key |
+| --- | --- | --- |
+| Create workspace / confirm batch | **Enter** | Fixed |
+| Open pane or tab in current workspace | **Ctrl+T** | `open_in_workspace` |
+| Toggle batch selection | **Ctrl+Space** | `select` |
+| Next / previous scope | **Ctrl+G** / **Ctrl+Shift+G** | `scope` / `scope_backward` |
+| Browse into / out of a directory | **Tab** / **Shift+Tab** | `enter_directory` / `parent_directory` |
+| Toggle favorite | **Ctrl+F** | `favorite` |
+| Add / remove root | **Ctrl+R** / **Ctrl+Shift+R** | `add_root` / `remove_root` |
+| Show shortcuts | **?** | `help` |
+| Navigate results / review | **Up** / **Down** | Fixed |
+| Remove selection in review | **Delete** / **Backspace** | Fixed |
+| Move search caret | **Left** / **Right**, **Home** / **End**, **Ctrl+A/E/B** | Fixed |
+| Edit search query | **Backspace**, **Delete**, **Ctrl+U/K/W** | Fixed |
+| Back / close picker | **Esc** | Fixed |
 
-Entering or leaving a directory clears the search. Tab shows descendants only; Shift+Tab from All or your home directory opens its parent (`/Users` on macOS). Highlight `Shared` there and press Tab to browse `/Users/Shared`. Shift+Tab can continue toward the filesystem root. Browsing `/Users` may also index accessible folders in other users’ homes. The help overlay is also available through the `? Shortcuts` footer hint.
-
-Search supports shell-style editing: **Ctrl+A/E** moves to the start/end; **Ctrl+U/K** deletes before/after the caret; **Ctrl+W** deletes the previous word. Arrow keys, Home, End, Backspace, and Delete also work. **Left** is the reliable way to move the caret left if Herdr intercepts **Ctrl+B** as its prefix. **Ctrl+F** always toggles a favorite, not caret-right.
+Entering or leaving a directory clears the search. Shift+Tab from All or your home directory opens its parent (`/Users` on macOS); you can then browse `Shared`. Browsing `/Users` may also index accessible folders in other users’ homes. Use **Left** if Herdr intercepts **Ctrl+B** as its prefix; **Ctrl+F** always toggles a favorite, not caret-right.
 
 ## Configuration
 
-The plugin creates `config.json` on first launch. Find its directory with:
+The picker creates `config.json` on first launch. Find its directory with:
 
 ```sh
 herdr plugin config-dir herdr-workspaces-manager
 ```
 
-For example, edit `$(herdr plugin config-dir herdr-workspaces-manager)/config.json` to set search roots, favorites, and layout limits:
+Open `config.json` there in your preferred editor. Add or adjust these settings inside the existing JSON object rather than replacing your roots or favorites; merge the `keybindings` entries if that object already exists:
 
 ```json
 {
-  "roots": ["~/ZedProjects", "~/PycharmProjects"],
-  "favorites": ["~/ZedProjects/special-project"],
-  "max_depth": 20,
-  "include_hidden": true,
-  "focus_created": false,
   "max_pane_columns": 2,
-  "max_pane_rows": 2
+  "max_pane_rows": 2,
+  "keybindings": {
+    "select": "ctrl+space",
+    "open_in_workspace": "ctrl+t"
+  }
 }
 ```
 
-Recent history is kept in `recent.json` under Herdr's plugin state directory (`HERDR_PLUGIN_STATE_DIR`), or beside `config.json` when running the picker directly. It is maintained automatically, not added to the configuration. Existing `~/ZedProjects` and `~/PycharmProjects` directories become initial roots when present. Other defaults include a 20-level discovery limit, `include_hidden: false`, and exclusion of hidden folders and common build/dependency directories (`node_modules`, `target`, `.venv`, and others). You can override those exclusions with `excluded_names` and the picker shortcuts with `keybindings`; press **?** in the picker to see the active bindings. Existing configurations automatically gain missing bindings; the old generated `shift+enter,ctrl+t` batch binding is migrated to `ctrl+space`, while custom bindings are preserved. The old generated `ctrl+d` root-removal binding is migrated to `ctrl+shift+r`.
+Other settings: `roots`, `favorites`, `max_depth` (20), `include_hidden` (false), `focus_created` (false), and `excluded_names`. Recent history is stored separately in `recent.json`. The picker migrates its old generated Shift+Enter/Ctrl+T batch binding to Ctrl+Space; custom bindings are preserved.
 
 ### How discovery works
 
