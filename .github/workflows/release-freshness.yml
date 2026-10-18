@@ -1,0 +1,46 @@
+name: release freshness
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require a new version for runtime changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          cargo = tomllib.loads(Path('Cargo.toml').read_text())['package']['version']
+          plugin = tomllib.loads(Path('herdr-plugin.toml').read_text())['version']
+          if cargo != plugin:
+              raise SystemExit(f'Cargo version {cargo} differs from plugin version {plugin}')
+          print(plugin)
+          PY
+          )"
+          latest="$(git tag --merged HEAD --list 'v[0-9]*' --sort=-version:refname | head -n 1)"
+          if [[ -z "$latest" ]]; then
+            echo 'No release tag yet; version consistency verified.'
+            exit 0
+          fi
+          if [[ "$latest" == "v${version}" ]]; then
+            changed="$(git diff --name-only "$latest" HEAD -- src herdr Cargo.toml Cargo.lock herdr-plugin.toml launch.sh)"
+            if [[ -n "$changed" ]]; then
+              echo "Runtime changes since $latest require a new package and plugin version:" >&2
+              echo "$changed" >&2
+              exit 1
+            fi
+          fi
+          echo "Version $version is consistent with release $latest."

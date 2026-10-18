@@ -94,3 +94,36 @@ jobs:
           files: dist/*
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+  smoke-install:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+          - os: macos-15-intel
+          - os: ubuntu-24.04
+          - os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      - name: Install the release binary without Cargo or Git metadata
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          cp herdr-plugin.toml "$tmp/"
+          mkdir -p "$tmp/herdr"
+          cp herdr/install.sh "$tmp/herdr/"
+          if PATH=/usr/bin:/bin command -v cargo >/dev/null 2>&1; then
+            echo 'Cargo must not be available for the precompiled-binary smoke test' >&2
+            exit 1
+          fi
+          HERDR_PLUGIN_ROOT="$tmp" PATH=/usr/bin:/bin /bin/bash "$tmp/herdr/install.sh"
+          test "$("$tmp/bin/herdr-workspaces-manager" --version)" = "herdr-workspaces-manager ${TAG#v}"
