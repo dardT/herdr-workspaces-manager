@@ -1,10 +1,14 @@
-use crate::config::{Config, normalize, project_path};
-use globset::{Glob, GlobSetBuilder};
+use crate::config::{Config, project_path};
+use crate::policy::Policy;
 use ignore::WalkBuilder;
 use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 #[derive(Clone, Debug)]
@@ -65,66 +69,50 @@ impl Project {
 pub fn discover(
     roots: &[PathBuf],
     favorites: &[PathBuf],
-    excluded_directory: Option<&Path>,
     include_roots: bool,
     config: &Config,
-) -> Vec<Project> {
+    generation: (Arc<AtomicU64>, u64),
+) -> Result<Vec<Project>, String> {
     let mut projects = HashMap::new();
-    let mut patterns = GlobSetBuilder::new();
-    for pattern in &config.excluded_names {
-        // Existing configs contain ".*" by default; the opt-in must override it.
-        if config.include_hidden && pattern == ".*" {
-            continue;
-        }
-        if let Ok(glob) = Glob::new(pattern) {
-            patterns.add(glob);
-        }
-    }
-    let excluded = patterns.build().ok();
-    let excluded_directory = excluded_directory.map(normalize);
+    let policy = Arc::new(Policy::new(config)?);
 
     for root in roots {
         let root = project_path(root);
         if !root.is_dir() {
             continue;
         }
-        let shared_root = cfg!(target_os = "macos") && root == Path::new("/Users/Shared");
+        let shared_root = cfg!(target_os = "macos")
+            && (root == Path::new("/") || root == Path::new("/Users/Shared"));
         let mut walker = WalkBuilder::new(&root);
         walker
-            .hidden(!config.include_hidden)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
+            .hidden(false)
+            .ignore(false)
+            .git_ignore(false)
+            .git_global(false)
+            .git_exclude(false)
             .require_git(false)
             .follow_links(shared_root)
             .max_depth(Some(config.max_depth));
-        let excluded = excluded.clone();
-        let excluded_directory = excluded_directory.clone();
+        let filter = Arc::clone(&policy);
+        let settings = config.clone();
+        let active = Arc::clone(&generation.0);
+        let scan_id = generation.1;
         walker.filter_entry(move |entry| {
-            if entry.depth() == 0 {
-                return true;
-            }
-            if entry.file_name() == ".git" {
-                return false;
-            }
-            if excluded_directory
-                .as_ref()
-                .is_some_and(|path| entry.path() == path)
-            {
-                return false;
-            }
-            !excluded
-                .as_ref()
-                .is_some_and(|set| set.is_match(entry.file_name()))
+            active.load(Ordering::Relaxed) == scan_id
+                && (entry.depth() == 0 || filter.traverse(entry.path(), &settings))
         });
         for entry in walker.build().flatten() {
+            if generation.0.load(Ordering::Relaxed) != generation.1 {
+                break;
+            }
             if !entry.file_type().is_some_and(|kind| kind.is_dir()) {
                 continue;
             }
-            // Keep the Shared spelling of symlinked directories so absolute searches
-            // can find them, even when their targets also appear under the home root.
+            // Keep the Shared spelling of symlinked directories in search results.
             let path = project_path(entry.path());
-            if entry.depth() > 0 || path.join(".git").exists() || include_roots {
+            if policy.visible(entry.path(), config)
+                && (entry.depth() > 0 || path.join(".git").exists() || include_roots)
+            {
                 projects
                     .entry(path.clone())
                     .or_insert_with(|| Project::from_path(path));
@@ -137,7 +125,7 @@ pub fn discover(
             projects.insert(path.clone(), Project::from_path(path));
         }
     }
-    projects.into_values().collect()
+    Ok(projects.into_values().collect())
 }
 
 pub fn basename(path: &Path) -> String {

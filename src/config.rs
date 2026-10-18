@@ -16,6 +16,31 @@ pub struct Config {
     pub max_pane_rows: usize,
     pub keybindings: Keybindings,
     pub excluded_names: Vec<String>,
+    pub discovery_profile: DiscoveryProfile,
+    pub rules: Vec<Rule>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryProfile {
+    #[default]
+    Auto,
+    Macos,
+    Unix,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Rule {
+    pub priority: i32,
+    pub action: RuleAction,
+    pub path: String,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleAction {
+    Include,
+    Exclude,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -28,8 +53,8 @@ pub struct Keybindings {
     pub enter_directory: String,
     pub parent_directory: String,
     pub favorite: String,
-    pub add_root: String,
-    pub remove_root: String,
+    #[serde(alias = "add_root")]
+    pub toggle_root: String,
     pub help: String,
 }
 
@@ -43,8 +68,7 @@ impl Default for Keybindings {
             enter_directory: "tab".into(),
             parent_directory: "shift+tab".into(),
             favorite: "ctrl+f".into(),
-            add_root: "ctrl+r".into(),
-            remove_root: "ctrl+shift+r".into(),
+            toggle_root: "ctrl+r".into(),
             help: "?".into(),
         }
     }
@@ -67,6 +91,8 @@ impl Default for Config {
             max_pane_columns: 2,
             max_pane_rows: 2,
             keybindings: Keybindings::default(),
+            discovery_profile: DiscoveryProfile::Auto,
+            rules: Vec::new(),
             excluded_names: [
                 ".*",
                 "node_modules",
@@ -95,15 +121,7 @@ pub fn home() -> PathBuf {
 }
 
 pub fn all_roots() -> Vec<PathBuf> {
-    let mut roots = vec![home()];
-    #[cfg(target_os = "macos")]
-    {
-        let shared = PathBuf::from("/Users/Shared");
-        if shared.is_dir() {
-            roots.push(shared);
-        }
-    }
-    roots
+    vec![PathBuf::from("/")]
 }
 
 pub fn normalize(path: &Path) -> PathBuf {
@@ -152,15 +170,14 @@ pub fn load(path: &Path) -> io::Result<Config> {
         {
             config.keybindings.select = "ctrl+space".into();
         }
-        // Migrate generated defaults while preserving other custom bindings.
-        let old_remove = config.keybindings.remove_root == "ctrl+d";
-        if old_remove {
-            config.keybindings.remove_root = "ctrl+shift+r".into();
-        }
-        if old_remove
+        // Preserve a custom add_root binding as the new toggle_root binding.
+        if value.pointer("/keybindings/add_root").is_some()
+            || value.pointer("/keybindings/remove_root").is_some()
             || missing_bindings
             || value.get("max_pane_columns").is_none()
             || value.get("max_pane_rows").is_none()
+            || value.get("discovery_profile").is_none()
+            || value.get("rules").is_none()
             || value
                 .pointer("/keybindings/select")
                 .is_some_and(|binding| binding == "shift+enter,ctrl+t")

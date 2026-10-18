@@ -27,7 +27,11 @@ use std::{
     collections::{BTreeSet, HashMap},
     io,
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
     time::Duration,
 };
@@ -41,7 +45,6 @@ type PreviewResult = (u64, io::Result<WorkspacePaths>);
 enum Mode {
     Picker,
     BatchReview,
-    RootConfirm,
     Help,
 }
 
@@ -81,7 +84,6 @@ struct App {
     review_state: ListState,
     review_list_area: Rect,
     dialog_buttons: Vec<(Rect, &'static str)>,
-    root_to_remove: Option<PathBuf>,
     favorite_undo_path: Option<PathBuf>,
     highlighted: usize,
     list_state: ListState,
@@ -92,8 +94,9 @@ struct App {
     status: String,
     root_added_notice: Option<String>,
     generation: u64,
-    sender: Sender<(u64, Vec<Project>)>,
-    receiver: Receiver<(u64, Vec<Project>)>,
+    active_scan: Arc<AtomicU64>,
+    sender: Sender<(u64, Result<Vec<Project>, String>)>,
+    receiver: Receiver<(u64, Result<Vec<Project>, String>)>,
     workspace_paths: Option<WorkspacePaths>,
     preview_error: Option<String>,
     preview_generation: u64,
@@ -127,7 +130,6 @@ impl App {
             review_state: ListState::default(),
             review_list_area: Rect::default(),
             dialog_buttons: Vec::new(),
-            root_to_remove: None,
             favorite_undo_path: None,
             highlighted: 0,
             list_state: ListState::default(),
@@ -138,6 +140,7 @@ impl App {
             status: String::new(),
             root_added_notice: None,
             generation: 0,
+            active_scan: Arc::new(AtomicU64::new(0)),
             sender,
             receiver,
             workspace_paths: None,
@@ -174,6 +177,8 @@ impl App {
         self.favorite_undo_path = None;
         self.generation += 1;
         let generation = self.generation;
+        self.active_scan.store(generation, Ordering::Relaxed);
+        let active_scan = Arc::clone(&self.active_scan);
         let (roots, favorites, scoped_directory) = match &self.scope {
             Scope::All => (config::all_roots(), Vec::new(), None),
             Scope::Favorites => (Vec::new(), self.config.favorites.clone(), None),
@@ -197,12 +202,6 @@ impl App {
             ),
             Scope::Directory(path) => (vec![path.clone()], Vec::new(), Some(path.clone())),
         };
-        let home = config::normalize(&config::home());
-        let excluded_directory = (self.scope == Scope::All
-            || scoped_directory
-                .as_ref()
-                .is_some_and(|directory| home.starts_with(directory)))
-        .then(|| home.join("Library"));
         let include_roots = matches!(self.scope, Scope::Root(_));
         let config = self.config.clone();
         let sender = self.sender.clone();
@@ -212,16 +211,19 @@ impl App {
         self.list_state = ListState::default();
         self.status = format!("Scanning {}…", self.scope_name());
         thread::spawn(move || {
-            let mut results = discovery::discover(
+            let results = discovery::discover(
                 &roots,
                 &favorites,
-                excluded_directory.as_deref(),
                 include_roots,
                 &config,
-            );
-            if let Some(directory) = scoped_directory {
-                results.retain(|project| project.path != directory);
-            }
+                (active_scan, generation),
+            )
+            .map(|mut results| {
+                if let Some(directory) = scoped_directory {
+                    results.retain(|project| project.path != directory);
+                }
+                results
+            });
             let _ = sender.send((generation, results));
         });
     }
@@ -232,8 +234,13 @@ impl App {
             if generation != self.generation {
                 continue;
             }
-            self.projects = projects;
-            self.filter();
+            match projects {
+                Ok(projects) => {
+                    self.projects = projects;
+                    self.filter();
+                }
+                Err(error) => self.status = format!("Discovery configuration error: {error}"),
+            }
             updated = true;
         }
         while let Ok((generation, preview)) = self.preview_receiver.try_recv() {
@@ -535,7 +542,7 @@ impl App {
                 .roots
                 .get(*index)
                 .map(|path| config::project_path(path)),
-            Scope::All => Some(config::normalize(&config::home())),
+            Scope::All => Some(PathBuf::from("/")),
             Scope::Favorites | Scope::Recent => None,
         };
         let Some(directory) = directory else {
@@ -643,19 +650,6 @@ impl App {
         }
     }
 
-    fn confirm_root_removal(&mut self) {
-        self.mode = Mode::Picker;
-        if let Some(path) = self.root_to_remove.take()
-            && let Some(index) = self
-                .config
-                .roots
-                .iter()
-                .position(|root| config::project_path(root) == path)
-        {
-            self.remove_root_index(index);
-        }
-    }
-
     fn remove_root_index(&mut self, index: usize) {
         let mut updated = self.config.clone();
         if index >= updated.roots.len() {
@@ -677,28 +671,6 @@ impl App {
             _ => {}
         }
         self.status = format!("Root removed: {}", path.display());
-    }
-
-    fn remove_root(&mut self) {
-        if let Some(index) = self.selected_path().and_then(|path| {
-            self.config
-                .roots
-                .iter()
-                .position(|root| config::project_path(root) == path)
-        }) {
-            self.remove_root_index(index);
-        } else if let Scope::Root(index) = self.scope {
-            self.root_to_remove = self
-                .config
-                .roots
-                .get(index)
-                .map(|path| config::project_path(path));
-            if self.root_to_remove.is_some() {
-                self.mode = Mode::RootConfirm;
-            }
-        } else {
-            self.status = "Highlight a configured root or select its root scope".into();
-        }
     }
 
     fn add_root_path(&mut self, path: &Path) {
@@ -731,11 +703,21 @@ impl App {
         );
     }
 
-    fn add_highlighted_root(&mut self) {
-        if let Some(path) = self.selected_path() {
-            self.add_root_path(&path);
+    fn toggle_root(&mut self) {
+        let Some(path) = self.selected_path() else {
+            self.status = "Highlight a directory before toggling its root".into();
+            return;
+        };
+        if let Some(index) = self
+            .config
+            .roots
+            .iter()
+            .position(|root| config::project_path(root) == path)
+        {
+            self.root_added_notice = None;
+            self.remove_root_index(index);
         } else {
-            self.status = "Highlight a directory before pressing Ctrl+R".into();
+            self.add_root_path(&path);
         }
     }
 
@@ -823,17 +805,6 @@ impl App {
             }
             return;
         }
-        if self.mode == Mode::RootConfirm {
-            match key.code {
-                KeyCode::Enter => self.confirm_root_removal(),
-                KeyCode::Esc => {
-                    self.root_to_remove = None;
-                    self.mode = Mode::Picker;
-                }
-                _ => {}
-            }
-            return;
-        }
         let bindings = &self.config.keybindings;
         if bound(&bindings.help, key) {
             self.mode = Mode::Help;
@@ -867,12 +838,8 @@ impl App {
             self.favorite();
             return;
         }
-        if bound(&bindings.add_root, key) {
-            self.add_highlighted_root();
-            return;
-        }
-        if bound(&bindings.remove_root, key) {
-            self.remove_root();
+        if bound(&bindings.toggle_root, key) {
+            self.toggle_root();
             return;
         }
         if self.edit_search_key(key) {
@@ -933,24 +900,6 @@ impl App {
                 _ => return,
             }
             self.review_state.select(Some(self.review_highlighted));
-            return;
-        }
-        if self.mode == Mode::RootConfirm {
-            if mouse.kind == MouseEventKind::Down(MouseButton::Left)
-                && let Some((_, action)) = self
-                    .dialog_buttons
-                    .iter()
-                    .find(|(rect, _)| contains(*rect, mouse.column, mouse.row))
-            {
-                match *action {
-                    "remove_root" => self.confirm_root_removal(),
-                    "back" => {
-                        self.root_to_remove = None;
-                        self.mode = Mode::Picker;
-                    }
-                    _ => {}
-                }
-            }
             return;
         }
         if self.mode != Mode::Picker {
@@ -1252,8 +1201,7 @@ impl App {
                      {}        Next search scope\n\
                      {}        Previous search scope\n\
                      {}        Toggle favorite\n\
-                     {}        Add highlighted project as a root\n\
-                     {}        Remove highlighted root; confirm active root otherwise\n\
+                     {}        Toggle highlighted directory as a root\n\
                      {}        Show / hide shortcuts\n\
                      Esc                   Back from overlay or review; close picker\n\n\
                      Recent keeps the last 30 opened projects, newest first.\n\
@@ -1266,8 +1214,7 @@ impl App {
                     keys.scope,
                     keys.scope_backward,
                     keys.favorite,
-                    keys.add_root,
-                    keys.remove_root,
+                    keys.toggle_root,
                     keys.help,
                 );
                 frame.render_widget(
@@ -1377,37 +1324,6 @@ impl App {
                 ] {
                     let width = u16::try_from(label.chars().count()).unwrap_or(u16::MAX);
                     let rect = Rect::new(x, parts[2].y, width, 1);
-                    frame.render_widget(
-                        Paragraph::new(label).style(Style::default().fg(Color::Yellow)),
-                        rect,
-                    );
-                    self.dialog_buttons.push((rect, action));
-                    x = x.saturating_add(width);
-                }
-            }
-            Mode::RootConfirm => {
-                let area = centered_cells(frame.area(), 72, 6);
-                frame.render_widget(Clear, area);
-                frame.render_widget(
-                    Block::default()
-                        .title(" Remove active root? ")
-                        .borders(Borders::ALL),
-                    area,
-                );
-                let path = self.root_to_remove.as_deref().unwrap_or(Path::new(""));
-                frame.render_widget(
-                    Paragraph::new(compact_path(path, area.width.saturating_sub(4))),
-                    Rect::new(
-                        area.x.saturating_add(2),
-                        area.y.saturating_add(2),
-                        area.width.saturating_sub(4),
-                        1,
-                    ),
-                );
-                let mut x = area.x.saturating_add(2);
-                for (label, action) in [(" Enter remove ", "remove_root"), (" Esc back ", "back")] {
-                    let width = u16::try_from(label.chars().count()).unwrap_or(u16::MAX);
-                    let rect = Rect::new(x, area.bottom().saturating_sub(2), width, 1);
                     frame.render_widget(
                         Paragraph::new(label).style(Style::default().fg(Color::Yellow)),
                         rect,
