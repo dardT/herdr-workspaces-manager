@@ -4,14 +4,14 @@ This is a Rust plugin. Install Rust/Cargo and [Task](https://taskfile.dev/); run
 
 ## Publish a release
 
-Publishing requires repository access and an authenticated [GitHub CLI](https://cli.github.com/). Choose a **new** version (for example, `0.1.2`), update it in `Cargo.toml` and `herdr-plugin.toml`, then run:
+Publishing requires repository access and an authenticated [GitHub CLI](https://cli.github.com/). Choose a **new** version (for example, `0.2.1`), update it in `Cargo.toml` and `herdr-plugin.toml`, refresh `Cargo.lock`, and add that version's changes to `CHANGELOG.md`. The release workflow uses the changelog as its GitHub release notes. Then run:
 
 ```sh
-export VERSION=0.1.2
-cargo check                     # Refreshes Cargo.lock
+export VERSION=0.2.1
+cargo check                     # Refresh Cargo.lock
 task release-check              # Format, Clippy, release build
 git diff --check
-git add Cargo.toml Cargo.lock herdr-plugin.toml
+git add Cargo.toml Cargo.lock herdr-plugin.toml CHANGELOG.md
 git commit -m "build: prepare v${VERSION} release"
 git push origin main
 git tag "v${VERSION}"
