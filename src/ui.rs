@@ -45,6 +45,12 @@ enum Mode {
     Help,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Destination {
+    Workspace,
+    CurrentWorkspace,
+}
+
 #[derive(Clone, PartialEq, Eq)]
 enum Scope {
     All,
@@ -63,6 +69,9 @@ struct App {
     recent_warning: Option<String>,
     scope: Scope,
     mode: Mode,
+    review_destination: Destination,
+    review_placements: Option<Vec<String>>,
+    review_placement_error: Option<String>,
     query: String,
     query_caret: usize,
     projects: Vec<Project>,
@@ -106,6 +115,9 @@ impl App {
             config_path,
             scope: Scope::All,
             mode: Mode::Picker,
+            review_destination: Destination::Workspace,
+            review_placements: None,
+            review_placement_error: None,
             query: String::new(),
             query_caret: 0,
             projects: Vec::new(),
@@ -163,7 +175,7 @@ impl App {
         self.generation += 1;
         let generation = self.generation;
         let (roots, favorites, scoped_directory) = match &self.scope {
-            Scope::All => (vec![config::home()], Vec::new(), None),
+            Scope::All => (config::all_roots(), Vec::new(), None),
             Scope::Favorites => (Vec::new(), self.config.favorites.clone(), None),
             Scope::Recent => {
                 match recent::paths(&self.recent_path) {
@@ -187,7 +199,9 @@ impl App {
         };
         let home = config::normalize(&config::home());
         let excluded_directory = (self.scope == Scope::All
-            || scoped_directory.as_ref() == Some(&home))
+            || scoped_directory
+                .as_ref()
+                .is_some_and(|directory| home.starts_with(directory)))
         .then(|| home.join("Library"));
         let include_roots = matches!(self.scope, Scope::Root(_));
         let config = self.config.clone();
@@ -237,6 +251,17 @@ impl App {
 
     fn filter(&mut self) {
         let mut matcher = Matcher::new(MatchConfig::DEFAULT);
+        // Path queries narrow by prefix; fuzzy matching remains for names and branches.
+        let path_prefix = if self.query == "~" {
+            Some(config::home().display().to_string())
+        } else if let Some(relative) = self.query.strip_prefix("~/") {
+            Some(format!("{}/{}", config::home().display(), relative))
+        } else if self.query.starts_with('/') {
+            Some(self.query.clone())
+        } else {
+            None
+        };
+        let path_prefix = path_prefix.map(|prefix| prefix.to_lowercase());
         // Atom normalizes the query as required by the matcher (including mixed-case input).
         let needle = Atom::new(
             &self.query,
@@ -252,6 +277,12 @@ impl App {
                 continue;
             }
             let path = project.path.to_string_lossy();
+            if let Some(prefix) = &path_prefix {
+                if path.to_lowercase().starts_with(prefix) {
+                    matched.push(index);
+                }
+                continue;
+            }
             let candidate = Utf32String::from(path.as_ref());
             let path_matches = needle.score(candidate.slice(..), &mut matcher).is_some();
             let branch_matches = !path_matches
@@ -441,7 +472,7 @@ impl App {
 
     fn scope_name(&self) -> String {
         match &self.scope {
-            Scope::All => "All home projects".into(),
+            Scope::All => "All projects".into(),
             Scope::Favorites => "Favorites".into(),
             Scope::Recent => "Recent".into(),
             Scope::Root(index) => self
@@ -449,7 +480,7 @@ impl App {
                 .roots
                 .get(*index)
                 .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "All home projects".into()),
+                .unwrap_or_else(|| "All projects".into()),
             Scope::Directory(path) => path.display().to_string(),
         }
     }
@@ -503,18 +534,14 @@ impl App {
                 .config
                 .roots
                 .get(*index)
-                .map(|path| config::normalize(path)),
-            Scope::All | Scope::Favorites | Scope::Recent => None,
+                .map(|path| config::project_path(path)),
+            Scope::All => Some(config::normalize(&config::home())),
+            Scope::Favorites | Scope::Recent => None,
         };
         let Some(directory) = directory else {
             self.status = "No directory scope to move up from".into();
             return;
         };
-        let home = config::normalize(&config::home());
-        if directory == home {
-            self.status = "Already at your home directory".into();
-            return;
-        }
         if let Some(parent) = directory.parent() {
             self.scope = Scope::Directory(parent.to_path_buf());
             self.query.clear();
@@ -534,9 +561,25 @@ impl App {
         }
     }
 
+    fn refresh_review_placement(&mut self) {
+        self.review_placements = None;
+        self.review_placement_error = None;
+        if self.review_destination == Destination::CurrentWorkspace {
+            match Herdr::new().pane_plan(
+                self.pending.len(),
+                self.config.max_pane_columns,
+                self.config.max_pane_rows,
+            ) {
+                Ok(plan) => self.review_placements = Some(plan.placements),
+                Err(error) => self.review_placement_error = Some(error.to_string()),
+            }
+        }
+    }
+
     fn remove_review_selection(&mut self) {
         if let Some(path) = self.pending.iter().nth(self.review_highlighted).cloned() {
             self.pending.remove(&path);
+            self.refresh_review_placement();
             if self.pending.is_empty() {
                 self.mode = Mode::Picker;
                 self.status = "Batch is empty · select projects to start again".into();
@@ -568,7 +611,7 @@ impl App {
             let removed = if let Some(index) = updated
                 .favorites
                 .iter()
-                .position(|item| config::normalize(item) == path)
+                .position(|item| config::project_path(item) == path)
             {
                 updated.favorites.remove(index);
                 true
@@ -607,7 +650,7 @@ impl App {
                 .config
                 .roots
                 .iter()
-                .position(|root| config::normalize(root) == path)
+                .position(|root| config::project_path(root) == path)
         {
             self.remove_root_index(index);
         }
@@ -619,7 +662,7 @@ impl App {
             self.status = "Root no longer available".into();
             return;
         }
-        let path = config::normalize(&updated.roots.remove(index));
+        let path = config::project_path(&updated.roots.remove(index));
         if let Err(error) = config::save(&self.config_path, &updated) {
             self.status = format!("Root could not be removed: {error}");
             return;
@@ -641,7 +684,7 @@ impl App {
             self.config
                 .roots
                 .iter()
-                .position(|root| config::normalize(root) == path)
+                .position(|root| config::project_path(root) == path)
         }) {
             self.remove_root_index(index);
         } else if let Scope::Root(index) = self.scope {
@@ -649,7 +692,7 @@ impl App {
                 .config
                 .roots
                 .get(index)
-                .map(|path| config::normalize(path));
+                .map(|path| config::project_path(path));
             if self.root_to_remove.is_some() {
                 self.mode = Mode::RootConfirm;
             }
@@ -659,7 +702,7 @@ impl App {
     }
 
     fn add_root_path(&mut self, path: &Path) {
-        let path = config::normalize(path);
+        let path = config::project_path(path);
         if !path.is_dir() {
             self.status = format!("Not a directory: {}", path.display());
             return;
@@ -668,7 +711,7 @@ impl App {
             .config
             .roots
             .iter()
-            .any(|root| config::normalize(root) == path)
+            .any(|root| config::project_path(root) == path)
         {
             self.status = format!("Root already available: {}", path.display());
             return;
@@ -696,14 +739,24 @@ impl App {
         }
     }
 
-    fn create(&mut self, paths: Vec<PathBuf>) {
+    fn create(&mut self, paths: Vec<PathBuf>, destination: Destination) {
         if paths.is_empty() {
             return;
         }
         let mut created = Vec::new();
-        let result = Herdr::new().create(&paths, self.config.focus_created, |path| {
-            created.push(path.to_path_buf());
-        });
+        let result = match destination {
+            Destination::Workspace => {
+                Herdr::new().create(&paths, self.config.focus_created, |path| {
+                    created.push(path.to_path_buf());
+                })
+            }
+            Destination::CurrentWorkspace => Herdr::new().open_in_workspace(
+                &paths,
+                self.config.max_pane_columns,
+                self.config.max_pane_rows,
+                |path| created.push(path.to_path_buf()),
+            ),
+        };
         if !created.is_empty()
             && let Err(error) = recent::record(&self.recent_path, &created)
         {
@@ -717,19 +770,21 @@ impl App {
                 if self.scope == Scope::Recent {
                     self.scan();
                 }
-                self.status = format!("Workspace creation failed: {error}");
+                self.status = format!("Project opening failed: {error}");
             }
         }
     }
 
-    fn activate(&mut self) {
+    fn activate(&mut self, destination: Destination) {
         if !self.pending.is_empty() {
+            self.review_destination = destination;
+            self.refresh_review_placement();
             self.review_highlighted = 0;
             self.review_state.select(Some(0));
             self.mode = Mode::BatchReview;
             self.refresh_workspace_preview();
         } else if let Some(path) = self.selected_path() {
-            self.create(vec![path]);
+            self.create(vec![path], destination);
         }
     }
 
@@ -759,7 +814,10 @@ impl App {
                     self.review_state.select(Some(self.review_highlighted));
                 }
                 KeyCode::Backspace | KeyCode::Delete => self.remove_review_selection(),
-                KeyCode::Enter => self.create(self.pending.iter().cloned().collect()),
+                KeyCode::Enter => self.create(
+                    self.pending.iter().cloned().collect(),
+                    self.review_destination,
+                ),
                 KeyCode::Esc => self.mode = Mode::Picker,
                 _ => {}
             }
@@ -783,6 +841,10 @@ impl App {
         }
         if bound(&bindings.select, key) {
             self.toggle_pending();
+            return;
+        }
+        if bound(&bindings.open_in_workspace, key) {
+            self.activate(Destination::CurrentWorkspace);
             return;
         }
         if bound(&bindings.scope, key) {
@@ -818,7 +880,7 @@ impl App {
         }
         match key.code {
             KeyCode::Esc => self.running = false,
-            KeyCode::Enter => self.activate(),
+            KeyCode::Enter => self.activate(Destination::Workspace),
             KeyCode::Up => {
                 self.highlighted = self.highlighted.saturating_sub(1);
                 self.list_state
@@ -850,7 +912,10 @@ impl App {
                         .find(|(rect, _)| contains(*rect, mouse.column, mouse.row))
                     {
                         match *action {
-                            "create" => self.create(self.pending.iter().cloned().collect()),
+                            "create" => self.create(
+                                self.pending.iter().cloned().collect(),
+                                self.review_destination,
+                            ),
                             "drop" => self.remove_review_selection(),
                             "back" => self.mode = Mode::Picker,
                             _ => {}
@@ -1043,13 +1108,13 @@ impl App {
             .config
             .favorites
             .iter()
-            .map(|path| config::normalize(path))
+            .map(|path| config::project_path(path))
             .collect();
         let root_paths: BTreeSet<_> = self
             .config
             .roots
             .iter()
-            .map(|path| config::normalize(path))
+            .map(|path| config::project_path(path))
             .collect();
         let rows = self
             .results
@@ -1129,11 +1194,17 @@ impl App {
         );
         if let Some(path) = self.selected_path() {
             let preview = if let Some(names) = self.preview_names(&[path]) {
-                format!("Next workspace: {} (estimated)", names[0])
+                format!(
+                    "Enter → workspace: {} (estimated) · {} → pane/tab",
+                    names[0], self.config.keybindings.open_in_workspace
+                )
             } else if let Some(error) = &self.preview_error {
                 format!("Name preview unavailable (creation still works): {error}")
             } else {
-                "Checking open workspaces for name preview…".into()
+                format!(
+                    "Checking workspace name… · {} → pane/tab",
+                    self.config.keybindings.open_in_workspace
+                )
             };
             frame.render_widget(
                 Paragraph::new(preview).style(Style::default().fg(Color::Cyan)),
@@ -1151,8 +1222,8 @@ impl App {
         );
         frame.render_widget(
             Paragraph::new(format!(
-                "{help_hint}· Enter create/review · {} select · Esc close",
-                self.config.keybindings.select,
+                "{help_hint}· Enter workspace · {} pane/tab · {} select · Esc close",
+                self.config.keybindings.open_in_workspace, self.config.keybindings.select,
             ))
             .style(Style::default().fg(Color::DarkGray)),
             sections[5],
@@ -1164,8 +1235,9 @@ impl App {
                 frame.render_widget(Clear, area);
                 let keys = &self.config.keybindings;
                 let content = format!(
-                    "Enter                 Create highlighted project; with a batch, review it\n\
-                     Enter (batch review)  Create selected workspaces\n\
+                    "Enter                 Create workspace; with a batch, review it\n\
+                     {}        Open in current workspace; with a batch, review it\n\
+                     Enter (batch review)  Confirm the chosen destination\n\
                      Up / Down (review)    Choose a selection; Delete removes it\n\
                      {}        Toggle pending selection\n\
                      Type / Backspace      Search / edit at caret\n\
@@ -1184,9 +1256,10 @@ impl App {
                      {}        Remove highlighted root; confirm active root otherwise\n\
                      {}        Show / hide shortcuts\n\
                      Esc                   Back from overlay or review; close picker\n\n\
-                     Recent keeps the last 30 created projects, newest first.\n\
+                     Recent keeps the last 30 opened projects, newest first.\n\
                      Click a row to highlight it; click scopes and action labels above.\n\
                      Edit config.json to change these picker shortcuts.",
+                    keys.open_in_workspace,
                     keys.select,
                     keys.enter_directory,
                     keys.parent_directory,
@@ -1213,7 +1286,11 @@ impl App {
                 frame.render_widget(Clear, area);
                 frame.render_widget(
                     Block::default()
-                        .title(" Review batch ")
+                        .title(if self.review_destination == Destination::Workspace {
+                            " Review workspaces "
+                        } else {
+                            " Review panes/tabs "
+                        })
                         .borders(Borders::ALL),
                     area,
                 );
@@ -1232,13 +1309,29 @@ impl App {
                     ])
                     .split(inner);
                 let paths: Vec<_> = self.pending.iter().cloned().collect();
-                let preview = self.preview_names(&paths);
-                let heading = if preview.is_some() {
-                    format!("{} selected · estimated workspace names", paths.len())
-                } else if self.preview_error.is_some() {
-                    format!("{} selected · name preview unavailable", paths.len())
-                } else {
-                    format!("{} selected · checking workspace names…", paths.len())
+                let workspace_preview = (self.review_destination == Destination::Workspace)
+                    .then(|| self.preview_names(&paths))
+                    .flatten();
+                let pane_preview = self.review_placements.as_ref();
+                let heading = match self.review_destination {
+                    Destination::CurrentWorkspace
+                        if let Some(error) = &self.review_placement_error =>
+                    {
+                        format!("{} selected · placement unavailable: {error}", paths.len())
+                    }
+                    Destination::CurrentWorkspace => format!(
+                        "{} selected · open in current workspace (placements estimated)",
+                        paths.len()
+                    ),
+                    Destination::Workspace if workspace_preview.is_some() => {
+                        format!("{} selected · estimated workspace names", paths.len())
+                    }
+                    Destination::Workspace if self.preview_error.is_some() => {
+                        format!("{} selected · name preview unavailable", paths.len())
+                    }
+                    Destination::Workspace => {
+                        format!("{} selected · checking workspace names…", paths.len())
+                    }
                 };
                 frame.render_widget(
                     Paragraph::new(heading).style(Style::default().fg(Color::Cyan)),
@@ -1249,7 +1342,13 @@ impl App {
                     .iter()
                     .enumerate()
                     .map(|(index, path)| {
-                        let text = if let Some(names) = &preview {
+                        let text = if let Some(plan) = &pane_preview {
+                            format!(
+                                "{}  ←  {}",
+                                plan[index],
+                                compact_path(path, parts[1].width.saturating_sub(28))
+                            )
+                        } else if let Some(names) = &workspace_preview {
                             let label_width = (parts[1].width / 3).min(32);
                             let path_width = parts[1].width.saturating_sub(label_width + 5);
                             format!(
@@ -1272,7 +1371,7 @@ impl App {
                 );
                 let mut x = parts[2].x;
                 for (label, action) in [
-                    (" Enter create ", "create"),
+                    (" Enter open ", "create"),
                     (" Del remove ", "drop"),
                     (" Esc back ", "back"),
                 ] {
@@ -1397,6 +1496,7 @@ fn bound(bindings: &str, key: KeyEvent) -> bool {
                 "enter" => code = Some(KeyCode::Enter),
                 "esc" | "escape" => code = Some(KeyCode::Esc),
                 "tab" => code = Some(KeyCode::Tab),
+                "space" => code = Some(KeyCode::Char(' ')),
                 "up" => code = Some(KeyCode::Up),
                 "down" => code = Some(KeyCode::Down),
                 character if character.chars().count() == 1 => {
@@ -1409,6 +1509,11 @@ fn bound(bindings: &str, key: KeyEvent) -> bool {
             && key.modifiers == KeyModifiers::SHIFT
             && matches!(key.code, KeyCode::Char('?') | KeyCode::Char('/'));
         let same_code = match (code, key.code) {
+            (Some(KeyCode::Char(' ')), KeyCode::Null | KeyCode::Char('\0'))
+                if modifiers == KeyModifiers::CONTROL =>
+            {
+                return key.modifiers == KeyModifiers::CONTROL || key.modifiers.is_empty();
+            }
             (Some(KeyCode::Char(expected)), KeyCode::Char(actual)) => {
                 expected.eq_ignore_ascii_case(&actual)
             }

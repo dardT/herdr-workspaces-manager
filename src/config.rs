@@ -10,7 +10,10 @@ pub struct Config {
     pub roots: Vec<PathBuf>,
     pub favorites: Vec<PathBuf>,
     pub max_depth: usize,
+    pub include_hidden: bool,
     pub focus_created: bool,
+    pub max_pane_columns: usize,
+    pub max_pane_rows: usize,
     pub keybindings: Keybindings,
     pub excluded_names: Vec<String>,
 }
@@ -19,6 +22,7 @@ pub struct Config {
 #[serde(default)]
 pub struct Keybindings {
     pub select: String,
+    pub open_in_workspace: String,
     pub scope: String,
     pub scope_backward: String,
     pub enter_directory: String,
@@ -32,7 +36,8 @@ pub struct Keybindings {
 impl Default for Keybindings {
     fn default() -> Self {
         Self {
-            select: "shift+enter,ctrl+t".into(),
+            select: "ctrl+space".into(),
+            open_in_workspace: "ctrl+t".into(),
             scope: "ctrl+g".into(),
             scope_backward: "ctrl+shift+g".into(),
             enter_directory: "tab".into(),
@@ -57,7 +62,10 @@ impl Default for Config {
             roots,
             favorites: Vec::new(),
             max_depth: 20,
+            include_hidden: false,
             focus_created: false,
+            max_pane_columns: 2,
+            max_pane_rows: 2,
             keybindings: Keybindings::default(),
             excluded_names: [
                 ".*",
@@ -86,6 +94,18 @@ pub fn home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+pub fn all_roots() -> Vec<PathBuf> {
+    let mut roots = vec![home()];
+    #[cfg(target_os = "macos")]
+    {
+        let shared = PathBuf::from("/Users/Shared");
+        if shared.is_dir() {
+            roots.push(shared);
+        }
+    }
+    roots
+}
+
 pub fn normalize(path: &Path) -> PathBuf {
     let expanded = if path == Path::new("~") {
         home()
@@ -95,6 +115,15 @@ pub fn normalize(path: &Path) -> PathBuf {
         path.to_path_buf()
     };
     fs::canonicalize(&expanded).unwrap_or(expanded)
+}
+
+// Keep the user-visible Shared alias for discovery, favorites and recent history.
+pub fn project_path(path: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") && path.starts_with("/Users/Shared") {
+        path.to_path_buf()
+    } else {
+        normalize(path)
+    }
 }
 
 pub fn config_path() -> PathBuf {
@@ -108,16 +137,34 @@ pub fn load(path: &Path) -> io::Result<Config> {
     if path.exists() {
         let value: serde_json::Value =
             serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)?;
-        let missing_bindings = ["scope_backward", "enter_directory", "parent_directory"]
-            .iter()
-            .any(|name| value.pointer(&format!("/keybindings/{name}")).is_none());
-        let mut config: Config = serde_json::from_value(value).map_err(io::Error::other)?;
+        let missing_bindings = [
+            "scope_backward",
+            "enter_directory",
+            "parent_directory",
+            "open_in_workspace",
+        ]
+        .iter()
+        .any(|name| value.pointer(&format!("/keybindings/{name}")).is_none());
+        let mut config: Config = serde_json::from_value(value.clone()).map_err(io::Error::other)?;
+        if value
+            .pointer("/keybindings/select")
+            .is_some_and(|binding| binding == "shift+enter,ctrl+t")
+        {
+            config.keybindings.select = "ctrl+space".into();
+        }
         // Migrate generated defaults while preserving other custom bindings.
         let old_remove = config.keybindings.remove_root == "ctrl+d";
         if old_remove {
             config.keybindings.remove_root = "ctrl+shift+r".into();
         }
-        if old_remove || missing_bindings {
+        if old_remove
+            || missing_bindings
+            || value.get("max_pane_columns").is_none()
+            || value.get("max_pane_rows").is_none()
+            || value
+                .pointer("/keybindings/select")
+                .is_some_and(|binding| binding == "shift+enter,ctrl+t")
+        {
             save(path, &config)?;
         }
         Ok(config)

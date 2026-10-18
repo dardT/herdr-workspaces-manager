@@ -1,4 +1,4 @@
-use crate::config::normalize;
+use crate::config::project_path;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Reverse,
@@ -31,7 +31,7 @@ fn load(path: &Path) -> io::Result<Vec<Entry>> {
         serde_json::from_slice(&fs::read(path)?).map_err(io::Error::other)?;
     entries.sort_by_key(|entry| Reverse(entry.last_opened));
     let mut seen = HashSet::new();
-    entries.retain(|entry| seen.insert(normalize(&entry.path)));
+    entries.retain(|entry| seen.insert(project_path(&entry.path)));
     entries.truncate(LIMIT);
     Ok(entries)
 }
@@ -39,7 +39,7 @@ fn load(path: &Path) -> io::Result<Vec<Entry>> {
 pub fn paths(path: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(load(path)?
         .into_iter()
-        .map(|entry| normalize(&entry.path))
+        .map(|entry| project_path(&entry.path))
         .collect())
 }
 
@@ -58,8 +58,8 @@ pub fn record(path: &Path, created: &[PathBuf]) -> io::Result<()> {
     lock.lock()?;
     let mut entries = load(path)?;
     for project in created {
-        let project = normalize(project);
-        entries.retain(|entry| normalize(&entry.path) != project);
+        let project = project_path(project);
+        entries.retain(|entry| project_path(&entry.path) != project);
         let last_opened = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(io::Error::other)?

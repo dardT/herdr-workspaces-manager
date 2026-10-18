@@ -1,4 +1,4 @@
-use crate::config::{Config, normalize};
+use crate::config::{Config, normalize, project_path};
 use globset::{Glob, GlobSetBuilder};
 use ignore::WalkBuilder;
 use std::{
@@ -72,6 +72,10 @@ pub fn discover(
     let mut projects = HashMap::new();
     let mut patterns = GlobSetBuilder::new();
     for pattern in &config.excluded_names {
+        // Existing configs contain ".*" by default; the opt-in must override it.
+        if config.include_hidden && pattern == ".*" {
+            continue;
+        }
         if let Ok(glob) = Glob::new(pattern) {
             patterns.add(glob);
         }
@@ -80,24 +84,28 @@ pub fn discover(
     let excluded_directory = excluded_directory.map(normalize);
 
     for root in roots {
-        let root = normalize(root);
+        let root = project_path(root);
         if !root.is_dir() {
             continue;
         }
+        let shared_root = cfg!(target_os = "macos") && root == Path::new("/Users/Shared");
         let mut walker = WalkBuilder::new(&root);
         walker
-            .hidden(true)
+            .hidden(!config.include_hidden)
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true)
             .require_git(false)
-            .follow_links(false)
+            .follow_links(shared_root)
             .max_depth(Some(config.max_depth));
         let excluded = excluded.clone();
         let excluded_directory = excluded_directory.clone();
         walker.filter_entry(move |entry| {
             if entry.depth() == 0 {
                 return true;
+            }
+            if entry.file_name() == ".git" {
+                return false;
             }
             if excluded_directory
                 .as_ref()
@@ -113,7 +121,9 @@ pub fn discover(
             if !entry.file_type().is_some_and(|kind| kind.is_dir()) {
                 continue;
             }
-            let path = normalize(entry.path());
+            // Keep the Shared spelling of symlinked directories so absolute searches
+            // can find them, even when their targets also appear under the home root.
+            let path = project_path(entry.path());
             if entry.depth() > 0 || path.join(".git").exists() || include_roots {
                 projects
                     .entry(path.clone())
@@ -122,7 +132,7 @@ pub fn discover(
         }
     }
     for favorite in favorites {
-        let path = normalize(favorite);
+        let path = project_path(favorite);
         if path.is_dir() {
             projects.insert(path.clone(), Project::from_path(path));
         }
