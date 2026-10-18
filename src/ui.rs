@@ -224,9 +224,19 @@ impl App {
         );
         let mut matched = Vec::new();
         for (index, project) in self.projects.iter().enumerate() {
+            if self.query.is_empty() {
+                matched.push(index);
+                continue;
+            }
             let path = project.path.to_string_lossy();
             let candidate = Utf32String::from(path.as_ref());
-            if self.query.is_empty() || needle.score(candidate.slice(..), &mut matcher).is_some() {
+            let path_matches = needle.score(candidate.slice(..), &mut matcher).is_some();
+            let branch_matches = !path_matches
+                && project.branch.as_ref().is_some_and(|branch| {
+                    let candidate = Utf32String::from(branch.as_str());
+                    needle.score(candidate.slice(..), &mut matcher).is_some()
+                });
+            if path_matches || branch_matches {
                 matched.push(index);
             }
         }
@@ -990,7 +1000,13 @@ impl App {
                 } else {
                     " "
                 };
-                let kind = if project.git { "git" } else { "dir" };
+                let kind = if project.worktree {
+                    "wt"
+                } else if project.git {
+                    "git"
+                } else {
+                    "dir"
+                };
                 let favorite = if favorite_paths.contains(&project.path) {
                     Span::styled(
                         "★",
@@ -1011,16 +1027,22 @@ impl App {
                 } else {
                     Span::raw(" ")
                 };
-                let line = Line::from(vec![
+                let mut parts = vec![
                     Span::raw(format!(" {marker} {kind:<3} ")),
                     favorite,
                     root,
-                    Span::raw(format!(
-                        " {:<22}  {}",
-                        discovery::basename(&project.path),
-                        project.path.display()
-                    )),
-                ]);
+                    Span::raw(format!(" {:<22}", discovery::basename(&project.path))),
+                ];
+                if let Some(branch) = &project.branch {
+                    parts.push(Span::styled(
+                        format!(" [{}]", compact_branch(branch, 20)),
+                        Style::default()
+                            .fg(Color::LightBlue)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                parts.push(Span::raw(format!("  {}", project.path.display())));
+                let line = Line::from(parts);
                 let style = if position == self.highlighted {
                     Style::default().fg(Color::White)
                 } else {
@@ -1234,6 +1256,24 @@ impl App {
             }
         }
     }
+}
+
+fn compact_branch(branch: &str, width: usize) -> String {
+    let mut visible = String::new();
+    let mut graphemes = branch.graphemes(true).peekable();
+    while let Some(grapheme) = graphemes.next() {
+        let needs_ellipsis = usize::from(graphemes.peek().is_some());
+        if UnicodeWidthStr::width(visible.as_str())
+            + UnicodeWidthStr::width(grapheme)
+            + needs_ellipsis
+            > width
+        {
+            visible.push('…');
+            return visible;
+        }
+        visible.push_str(grapheme);
+    }
+    visible
 }
 
 fn compact_path(path: &Path, width: u16) -> String {

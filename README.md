@@ -38,11 +38,11 @@ Requires **Herdr 0.9.3+** on macOS or Linux.
 
 ### Find a project
 
-The picker starts in **All**, which discovers directories under your home directory. Type to fuzzy-search names and paths; results are ordered by directory depth (shallowest first), then full path. Use **Up/Down**, the mouse wheel, or a click to highlight a row. Clicking a row only highlights it; it does not create a workspace.
+The picker starts in **All**, which discovers directories under your home directory. Type to fuzzy-search names, paths, or Git branches; results are ordered by directory depth (shallowest first), then full path. Use **Up/Down**, the mouse wheel, or a click to highlight a row. Clicking a row only highlights it; it does not create a workspace.
 
 Switch between **All**, **Favorites**, and each configured root with **Ctrl+G** (forward), **Ctrl+Shift+G** (backward), or a click on a scope label. Each root is a narrower search scope and can point outside your home directory. Favorites form their own scope rather than being inserted into other scopes. Scope labels keep a stable order.
 
-A **★** marks a favorite; a **⌂** marks a directory that exactly matches a configured root. Both can appear on the same row.
+A **★** marks a favorite; a **⌂** marks a directory that exactly matches a configured root. Both can appear on the same row. Results show `git` for ordinary Git checkouts, `wt` for linked Git worktrees, and `dir` for other directories. Git rows display a compact branch label (or `@` plus a short commit ID for detached HEAD). Branch names are searchable in every scope without changing its ordering.
 
 ### Organize favorites and roots
 
