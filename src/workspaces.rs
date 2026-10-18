@@ -55,17 +55,23 @@ impl Herdr {
         Ok(paths)
     }
 
-    pub fn create(&self, projects: &[PathBuf], focus: bool) -> io::Result<()> {
+    pub fn create(
+        &self,
+        projects: &[PathBuf],
+        focus: bool,
+        mut on_created: impl FnMut(&Path),
+    ) -> io::Result<()> {
         let previous = self.workspace_paths()?;
         let previous_names: HashMap<_, _> = labels(&previous).into_iter().collect();
         let mut created = Vec::new();
         for path in projects {
-            let path = path.to_string_lossy();
-            let result = self.call(&["workspace", "create", "--cwd", &path, "--no-focus"])?;
+            let cwd = path.to_string_lossy();
+            let result = self.call(&["workspace", "create", "--cwd", &cwd, "--no-focus"])?;
             let id = result["workspace"]["workspace_id"]
                 .as_str()
                 .ok_or_else(|| io::Error::other("Herdr did not return a workspace ID"))?;
             created.push(id.to_owned());
+            on_created(path);
         }
         let current = self.workspace_paths()?;
         let created_set: HashSet<_> = created.iter().collect();

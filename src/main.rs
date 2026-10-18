@@ -1,5 +1,6 @@
 mod config;
 mod discovery;
+mod recent;
 mod ui;
 mod workspaces;
 

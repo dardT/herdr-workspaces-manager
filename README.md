@@ -38,9 +38,9 @@ Requires **Herdr 0.9.3+** on macOS or Linux.
 
 ### Find a project
 
-The picker starts in **All**, which discovers directories under your home directory. Type to fuzzy-search names, paths, or Git branches; results are ordered by directory depth (shallowest first), then full path. Use **Up/Down**, the mouse wheel, or a click to highlight a row. Clicking a row only highlights it; it does not create a workspace.
+The picker starts in **All**, which discovers directories under your home directory. Type to fuzzy-search names, paths, or Git branches; results are ordered by directory depth (shallowest first), then full path, except in Recent. Use **Up/Down**, the mouse wheel, or a click to highlight a row. Clicking a row only highlights it; it does not create a workspace.
 
-Switch between **All**, **Favorites**, and each configured root with **Ctrl+G** (forward), **Ctrl+Shift+G** (backward), or a click on a scope label. Each root is a narrower search scope and can point outside your home directory. Favorites form their own scope rather than being inserted into other scopes. Scope labels keep a stable order.
+Switch between **All**, **Favorites**, **Recent**, and each configured root with **Ctrl+G** (forward), **Ctrl+Shift+G** (backward), or a click on a scope label. Each root is a narrower search scope and can point outside your home directory. Favorites and Recent form their own scopes rather than being inserted into other scopes. Scope labels keep a stable order. **Recent** fuzzy-filters its projects but always lists matches by last-opened time, newest first; dates are not displayed.
 
 A **★** marks a favorite; a **⌂** marks a directory that exactly matches a configured root. Both can appear on the same row. Results show `git` for ordinary Git checkouts, `wt` for linked Git worktrees, and `dir` for other directories. Git rows display a compact branch label (or `@` plus a short commit ID for detached HEAD). Branch names are searchable in every scope without changing its ordering.
 
@@ -64,7 +64,7 @@ Some terminals cannot report **Ctrl+Shift+R** distinctly. In that case, edit `ro
 
 The picker also previews the highlighted project's proposed workspace name. Batch review refreshes the list of open Herdr workspaces before predicting names; if Herdr cannot provide that list, creation remains available. Names are estimates and may change if other workspaces are created meanwhile.
 
-Each selection creates a new workspace, even if that path is already open. Created workspaces stay unfocused by default. Labels use the shortest suffix that distinguishes open paths; repeated identical paths receive `#1`, `#2`, and so on. Existing labels change only when a new workspace makes them ambiguous.
+Each selection creates a new workspace, even if that path is already open. Successfully created project paths are added to Recent, with repeated paths moved to the top; the latest 30 distinct paths are kept across picker sessions. Partial batches record projects whose workspaces were created even if another creation fails. Created workspaces stay unfocused by default. Labels use the shortest suffix that distinguishes open paths; repeated identical paths receive `#1`, `#2`, and so on. Existing labels change only when a new workspace makes them ambiguous.
 
 ### Browse and edit
 
@@ -99,7 +99,7 @@ For example, edit `$(herdr plugin config-dir herdr-workspaces-manager)/config.js
 }
 ```
 
-Existing `~/ZedProjects` and `~/PycharmProjects` directories become initial roots when present. Other defaults include a 20-level discovery limit and exclusion of hidden folders and common build/dependency directories (`node_modules`, `target`, `.venv`, and others). You can override those exclusions with `excluded_names` and the picker shortcuts with `keybindings`; press **?** in the picker to see the active bindings. Existing configurations automatically gain missing scope/browsing bindings, and the old generated `ctrl+d` root-removal binding is migrated to `ctrl+shift+r`.
+Recent history is kept in `recent.json` under Herdr's plugin state directory (`HERDR_PLUGIN_STATE_DIR`), or beside `config.json` when running the picker directly. It is maintained automatically, not added to the configuration. Existing `~/ZedProjects` and `~/PycharmProjects` directories become initial roots when present. Other defaults include a 20-level discovery limit and exclusion of hidden folders and common build/dependency directories (`node_modules`, `target`, `.venv`, and others). You can override those exclusions with `excluded_names` and the picker shortcuts with `keybindings`; press **?** in the picker to see the active bindings. Existing configurations automatically gain missing scope/browsing bindings, and the old generated `ctrl+d` root-removal binding is migrated to `ctrl+shift+r`.
 
 ### How discovery works
 

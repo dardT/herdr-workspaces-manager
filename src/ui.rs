@@ -1,6 +1,7 @@
 use crate::{
     config::{self, Config},
     discovery::{self, Project},
+    recent,
     workspaces::{Herdr, planned_labels},
 };
 use crossterm::{
@@ -23,7 +24,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     io,
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, Sender},
@@ -48,6 +49,7 @@ enum Mode {
 enum Scope {
     All,
     Favorites,
+    Recent,
     Root(usize),
     Directory(PathBuf),
 }
@@ -55,6 +57,10 @@ enum Scope {
 struct App {
     config: Config,
     config_path: PathBuf,
+    recent_path: PathBuf,
+    recent_paths: Vec<PathBuf>,
+    recent_error: Option<String>,
+    recent_warning: Option<String>,
     scope: Scope,
     mode: Mode,
     query: String,
@@ -93,6 +99,10 @@ impl App {
         let (preview_sender, preview_receiver) = mpsc::channel();
         let mut app = Self {
             config,
+            recent_path: recent::state_path(&config_path),
+            recent_paths: Vec::new(),
+            recent_error: None,
+            recent_warning: None,
             config_path,
             scope: Scope::All,
             mode: Mode::Picker,
@@ -155,6 +165,19 @@ impl App {
         let (roots, favorites, scoped_directory) = match &self.scope {
             Scope::All => (vec![config::home()], Vec::new(), None),
             Scope::Favorites => (Vec::new(), self.config.favorites.clone(), None),
+            Scope::Recent => {
+                match recent::paths(&self.recent_path) {
+                    Ok(paths) => {
+                        self.recent_paths = paths;
+                        self.recent_error = None;
+                    }
+                    Err(error) => {
+                        self.recent_paths.clear();
+                        self.recent_error = Some(error.to_string());
+                    }
+                }
+                (Vec::new(), self.recent_paths.clone(), None)
+            }
             Scope::Root(index) => (
                 self.config.roots.get(*index).cloned().into_iter().collect(),
                 Vec::new(),
@@ -240,14 +263,29 @@ impl App {
                 matched.push(index);
             }
         }
-        matched.sort_unstable_by(|left, right| {
-            let left = &self.projects[*left].path;
-            let right = &self.projects[*right].path;
-            left.components()
-                .count()
-                .cmp(&right.components().count())
-                .then_with(|| left.cmp(right))
-        });
+        if self.scope == Scope::Recent {
+            let order: HashMap<_, _> = self
+                .recent_paths
+                .iter()
+                .enumerate()
+                .map(|(position, path)| (path, position))
+                .collect();
+            matched.sort_unstable_by_key(|index| {
+                order
+                    .get(&self.projects[*index].path)
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            });
+        } else {
+            matched.sort_unstable_by(|left, right| {
+                let left = &self.projects[*left].path;
+                let right = &self.projects[*right].path;
+                left.components()
+                    .count()
+                    .cmp(&right.components().count())
+                    .then_with(|| left.cmp(right))
+            });
+        }
         let matches = matched.len();
         self.results = matched.into_iter().take(1000).collect();
         self.highlighted = self.highlighted.min(self.results.len().saturating_sub(1));
@@ -261,6 +299,11 @@ impl App {
         );
         if let Some(notice) = &self.root_added_notice {
             self.status = format!("{notice} · {matches} matches");
+        }
+        if self.scope == Scope::Recent
+            && let Some(error) = &self.recent_error
+        {
+            self.status = format!("Recent history unavailable: {error}");
         }
     }
 
@@ -400,6 +443,7 @@ impl App {
         match &self.scope {
             Scope::All => "All home projects".into(),
             Scope::Favorites => "Favorites".into(),
+            Scope::Recent => "Recent".into(),
             Scope::Root(index) => self
                 .config
                 .roots
@@ -419,8 +463,9 @@ impl App {
     fn next_scope(&mut self) {
         self.scope = match &self.scope {
             Scope::All => Scope::Favorites,
-            Scope::Favorites if self.config.roots.is_empty() => Scope::All,
-            Scope::Favorites => Scope::Root(0),
+            Scope::Favorites => Scope::Recent,
+            Scope::Recent if self.config.roots.is_empty() => Scope::All,
+            Scope::Recent => Scope::Root(0),
             Scope::Root(index) if index + 1 < self.config.roots.len() => Scope::Root(index + 1),
             Scope::Root(_) | Scope::Directory(_) => Scope::All,
         };
@@ -429,10 +474,11 @@ impl App {
 
     fn previous_scope(&mut self) {
         self.scope = match &self.scope {
-            Scope::All if self.config.roots.is_empty() => Scope::Favorites,
+            Scope::All if self.config.roots.is_empty() => Scope::Recent,
             Scope::All => Scope::Root(self.config.roots.len() - 1),
             Scope::Favorites => Scope::All,
-            Scope::Root(0) => Scope::Favorites,
+            Scope::Recent => Scope::Favorites,
+            Scope::Root(0) => Scope::Recent,
             Scope::Root(index) => Scope::Root(index - 1),
             Scope::Directory(_) => Scope::All,
         };
@@ -458,7 +504,7 @@ impl App {
                 .roots
                 .get(*index)
                 .map(|path| config::normalize(path)),
-            Scope::All | Scope::Favorites => None,
+            Scope::All | Scope::Favorites | Scope::Recent => None,
         };
         let Some(directory) = directory else {
             self.status = "No directory scope to move up from".into();
@@ -654,12 +700,24 @@ impl App {
         if paths.is_empty() {
             return;
         }
-        match Herdr::new().create(&paths, self.config.focus_created) {
+        let mut created = Vec::new();
+        let result = Herdr::new().create(&paths, self.config.focus_created, |path| {
+            created.push(path.to_path_buf());
+        });
+        if !created.is_empty()
+            && let Err(error) = recent::record(&self.recent_path, &created)
+        {
+            self.recent_warning = Some(format!("Recent history could not be saved: {error}"));
+        }
+        match result {
             Ok(()) => self.running = false,
             Err(error) => {
-                self.status = format!("Workspace creation failed: {error}");
                 self.mode = Mode::Picker;
                 self.refresh_workspace_preview();
+                if self.scope == Scope::Recent {
+                    self.scan();
+                }
+                self.status = format!("Workspace creation failed: {error}");
             }
         }
     }
@@ -899,7 +957,11 @@ impl App {
         self.action_buttons.clear();
         self.dialog_buttons.clear();
         let mut x = sections[1].x;
-        for (text, scope) in [("All", Scope::All), ("★ Favorites", Scope::Favorites)] {
+        for (text, scope) in [
+            ("All", Scope::All),
+            ("★ Favorites", Scope::Favorites),
+            ("Recent", Scope::Recent),
+        ] {
             let width = u16::try_from(text.chars().count() + 2).unwrap_or(u16::MAX);
             if x.saturating_add(width) > sections[1].right() {
                 break;
@@ -1122,6 +1184,7 @@ impl App {
                      {}        Remove highlighted root; confirm active root otherwise\n\
                      {}        Show / hide shortcuts\n\
                      Esc                   Back from overlay or review; close picker\n\n\
+                     Recent keeps the last 30 created projects, newest first.\n\
                      Click a row to highlight it; click scopes and action labels above.\n\
                      Edit config.json to change these picker shortcuts.",
                     keys.select,
@@ -1393,5 +1456,8 @@ pub fn run() -> io::Result<()> {
         let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
     }
     ratatui::restore();
+    if let Some(warning) = app.recent_warning {
+        eprintln!("{warning}");
+    }
     result
 }
