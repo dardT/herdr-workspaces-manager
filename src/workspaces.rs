@@ -31,7 +31,7 @@ impl Herdr {
             .ok_or_else(|| io::Error::other("Missing Herdr result"))
     }
 
-    fn workspace_paths(&self) -> io::Result<Vec<(String, PathBuf)>> {
+    pub fn workspace_paths(&self) -> io::Result<Vec<(String, PathBuf)>> {
         let response = self.call(&["workspace", "list"])?;
         let mut paths = Vec::new();
         for workspace in response["workspaces"].as_array().into_iter().flatten() {
@@ -79,6 +79,24 @@ impl Herdr {
         }
         Ok(())
     }
+}
+
+pub fn planned_labels(existing: &[(String, PathBuf)], projects: &[PathBuf]) -> Vec<String> {
+    let mut paths = existing.to_vec();
+    let mut used_ids: HashSet<String> = existing.iter().map(|(id, _)| id.clone()).collect();
+    for (index, path) in projects.iter().enumerate() {
+        let mut id = format!("__preview_{index}");
+        while used_ids.contains(&id) {
+            id.push('_');
+        }
+        used_ids.insert(id.clone());
+        paths.push((id, normalize(path)));
+    }
+    labels(&paths)
+        .into_iter()
+        .skip(existing.len())
+        .map(|(_, name)| name)
+        .collect()
 }
 
 pub fn labels(paths: &[(String, PathBuf)]) -> Vec<(String, String)> {

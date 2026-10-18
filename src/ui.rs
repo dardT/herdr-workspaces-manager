@@ -1,7 +1,7 @@
 use crate::{
     config::{self, Config},
     discovery::{self, Project},
-    workspaces::Herdr,
+    workspaces::{Herdr, planned_labels},
 };
 use crossterm::{
     event::{
@@ -32,6 +32,9 @@ use std::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+
+type WorkspacePaths = Vec<(String, PathBuf)>;
+type PreviewResult = (u64, io::Result<WorkspacePaths>);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -76,12 +79,18 @@ struct App {
     generation: u64,
     sender: Sender<(u64, Vec<Project>)>,
     receiver: Receiver<(u64, Vec<Project>)>,
+    workspace_paths: Option<WorkspacePaths>,
+    preview_error: Option<String>,
+    preview_generation: u64,
+    preview_sender: Sender<PreviewResult>,
+    preview_receiver: Receiver<PreviewResult>,
     running: bool,
 }
 
 impl App {
     fn new(config: Config, config_path: PathBuf) -> Self {
         let (sender, receiver) = mpsc::channel();
+        let (preview_sender, preview_receiver) = mpsc::channel();
         let mut app = Self {
             config,
             config_path,
@@ -109,10 +118,33 @@ impl App {
             generation: 0,
             sender,
             receiver,
+            workspace_paths: None,
+            preview_error: None,
+            preview_generation: 0,
+            preview_sender,
+            preview_receiver,
             running: true,
         };
         app.scan();
+        app.refresh_workspace_preview();
         app
+    }
+
+    fn refresh_workspace_preview(&mut self) {
+        self.preview_generation += 1;
+        let generation = self.preview_generation;
+        self.workspace_paths = None;
+        self.preview_error = None;
+        let sender = self.preview_sender.clone();
+        thread::spawn(move || {
+            let _ = sender.send((generation, Herdr::new().workspace_paths()));
+        });
+    }
+
+    fn preview_names(&self, projects: &[PathBuf]) -> Option<Vec<String>> {
+        self.workspace_paths
+            .as_ref()
+            .map(|existing| planned_labels(existing, projects))
     }
 
     fn scan(&mut self) {
@@ -165,6 +197,16 @@ impl App {
             }
             self.projects = projects;
             self.filter();
+            updated = true;
+        }
+        while let Ok((generation, preview)) = self.preview_receiver.try_recv() {
+            if generation != self.preview_generation {
+                continue;
+            }
+            match preview {
+                Ok(paths) => self.workspace_paths = Some(paths),
+                Err(error) => self.preview_error = Some(error.to_string()),
+            }
             updated = true;
         }
         updated
@@ -607,6 +649,7 @@ impl App {
             Err(error) => {
                 self.status = format!("Workspace creation failed: {error}");
                 self.mode = Mode::Picker;
+                self.refresh_workspace_preview();
             }
         }
     }
@@ -616,6 +659,7 @@ impl App {
             self.review_highlighted = 0;
             self.review_state.select(Some(0));
             self.mode = Mode::BatchReview;
+            self.refresh_workspace_preview();
         } else if let Some(path) = self.selected_path() {
             self.create(vec![path]);
         }
@@ -829,7 +873,7 @@ impl App {
                 Constraint::Length(4),
                 Constraint::Length(3),
                 Constraint::Min(4),
-                Constraint::Length(2),
+                Constraint::Length(3),
                 Constraint::Length(1),
             ])
             .split(frame.area());
@@ -997,8 +1041,21 @@ impl App {
         frame.render_stateful_widget(list, sections[3], &mut self.list_state);
         frame.render_widget(
             Paragraph::new(self.status.as_str()).wrap(Wrap { trim: true }),
-            sections[4],
+            Rect::new(sections[4].x, sections[4].y, sections[4].width, 2),
         );
+        if let Some(path) = self.selected_path() {
+            let preview = if let Some(names) = self.preview_names(&[path]) {
+                format!("Next workspace: {} (estimated)", names[0])
+            } else if let Some(error) = &self.preview_error {
+                format!("Name preview unavailable (creation still works): {error}")
+            } else {
+                "Checking open workspaces for name preview…".into()
+            };
+            frame.render_widget(
+                Paragraph::new(preview).style(Style::default().fg(Color::Cyan)),
+                Rect::new(sections[4].x, sections[4].y + 2, sections[4].width, 1),
+            );
+        }
         let help_hint = format!(" {} Shortcuts ", self.config.keybindings.help);
         self.help_button = Rect::new(
             sections[5].x,
@@ -1089,19 +1146,37 @@ impl App {
                         Constraint::Length(1),
                     ])
                     .split(inner);
+                let paths: Vec<_> = self.pending.iter().cloned().collect();
+                let preview = self.preview_names(&paths);
+                let heading = if preview.is_some() {
+                    format!("{} selected · estimated workspace names", paths.len())
+                } else if self.preview_error.is_some() {
+                    format!("{} selected · name preview unavailable", paths.len())
+                } else {
+                    format!("{} selected · checking workspace names…", paths.len())
+                };
                 frame.render_widget(
-                    Paragraph::new(format!(
-                        "{} selected · remove mistakes before creating",
-                        self.pending.len()
-                    ))
-                    .style(Style::default().fg(Color::Cyan)),
+                    Paragraph::new(heading).style(Style::default().fg(Color::Cyan)),
                     parts[0],
                 );
                 self.review_list_area = parts[1];
-                let rows = self
-                    .pending
+                let rows = paths
                     .iter()
-                    .map(|path| ListItem::new(compact_path(path, parts[1].width.saturating_sub(2))))
+                    .enumerate()
+                    .map(|(index, path)| {
+                        let text = if let Some(names) = &preview {
+                            let label_width = (parts[1].width / 3).min(32);
+                            let path_width = parts[1].width.saturating_sub(label_width + 5);
+                            format!(
+                                "{}  ←  {}",
+                                compact_path(Path::new(&names[index]), label_width),
+                                compact_path(path, path_width)
+                            )
+                        } else {
+                            compact_path(path, parts[1].width.saturating_sub(2))
+                        };
+                        ListItem::new(text)
+                    })
                     .collect::<Vec<_>>();
                 frame.render_stateful_widget(
                     List::new(rows)

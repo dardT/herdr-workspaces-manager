@@ -60,7 +60,9 @@ Some terminals cannot report **Ctrl+Shift+R** distinctly. In that case, edit `ro
 
 - Press **Enter** to create a workspace for the highlighted directory and close the picker.
 - Press **Shift+Enter** to add or remove a directory from a pending batch. Use **Ctrl+T** if your terminal does not distinguish Shift+Enter.
-- With a batch pending, press **Enter** to review only the selected paths. Remove a mistake with **Delete/Backspace** (or Shift+Enter/Ctrl+T), press **Esc** to return and select more, or press **Enter** again to create the remaining workspaces.
+- With a batch pending, press **Enter** to review only the selected paths and their proposed workspace names. Remove a mistake with **Delete/Backspace** (or Shift+Enter/Ctrl+T), press **Esc** to return and select more, or press **Enter** again to create the remaining workspaces.
+
+The picker also previews the highlighted project's proposed workspace name. Batch review refreshes the list of open Herdr workspaces before predicting names; if Herdr cannot provide that list, creation remains available. Names are estimates and may change if other workspaces are created meanwhile.
 
 Each selection creates a new workspace, even if that path is already open. Created workspaces stay unfocused by default. Labels use the shortest suffix that distinguishes open paths; repeated identical paths receive `#1`, `#2`, and so on. Existing labels change only when a new workspace makes them ambiguous.
 
