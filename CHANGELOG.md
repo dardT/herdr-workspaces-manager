@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Configurable, prioritized include/exclude discovery rules and selectable `auto`, `macos`, or `unix` profiles on either OS.
+
+### Changed
+
+- **Ctrl+R** now toggles the highlighted directory as a root, replacing the separate Ctrl+Shift+R removal shortcut. Existing custom `add_root` bindings migrate to `toggle_root`; removing the active root returns to All.
+- macOS All defaults to the current user's home and `/Users/Shared`; Unix All covers accessible paths with system-directory exclusions. Existing generated-folder and Git-ignore exclusions remain, with explicit include-rule overrides. Favorites and Recent remain directly accessible.
+
 ## v0.2.0
 
 ### Added
