@@ -1,8 +1,8 @@
 [package]
 name = "herdr-workspaces-manager"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
-description = "Discover local projects and create distinct Herdr workspaces"
+description = "Find projects and open them in Herdr workspaces or panes"
 
 [dependencies]
 ratatui = "0.29"

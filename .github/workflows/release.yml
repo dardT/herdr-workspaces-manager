@@ -83,6 +83,25 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+      - name: Extract notes for this release
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          changelog = Path('CHANGELOG.md').read_text()
+          tag = os.environ['TAG']
+          match = re.search(rf'^## {re.escape(tag)}\s*\n(.*?)(?=^## |\Z)', changelog, re.M | re.S)
+          if not match:
+              raise SystemExit(f'CHANGELOG.md has no section for {tag}')
+          Path('release-notes.md').write_text(match.group(1).strip() + '\n')
+          PY
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
@@ -93,7 +112,7 @@ jobs:
           tag_name: ${{ inputs.tag || github.ref_name }}
           files: dist/*
           fail_on_unmatched_files: true
-          generate_release_notes: true
+          body_path: release-notes.md
 
   smoke-install:
     needs: publish
