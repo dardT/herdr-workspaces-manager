@@ -70,6 +70,7 @@ pub fn discover(
     roots: &[PathBuf],
     favorites: &[PathBuf],
     include_roots: bool,
+    browse_root_repo: bool,
     config: &Config,
     generation: (Arc<AtomicU64>, u64),
 ) -> Result<Vec<Project>, String> {
@@ -95,11 +96,18 @@ pub fn discover(
             .max_depth(Some(config.max_depth));
         let filter = Arc::clone(&policy);
         let settings = config.clone();
+        let stop_at_repos = config.ignore_git_repo_contents && !browse_root_repo;
         let active = Arc::clone(&generation.0);
         let scan_id = generation.1;
         walker.filter_entry(move |entry| {
             active.load(Ordering::Relaxed) == scan_id
-                && (entry.depth() == 0 || filter.traverse(entry.path(), &settings))
+                && (entry.depth() == 0
+                    || (filter.traverse(entry.path(), &settings)
+                        && (!stop_at_repos
+                            || !entry
+                                .path()
+                                .parent()
+                                .is_some_and(|parent| parent.join(".git").exists()))))
         });
         for entry in walker.build().flatten() {
             if generation.0.load(Ordering::Relaxed) != generation.1 {

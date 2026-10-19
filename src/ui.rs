@@ -203,6 +203,7 @@ impl App {
             Scope::Directory(path) => (vec![path.clone()], Vec::new(), Some(path.clone())),
         };
         let include_roots = matches!(self.scope, Scope::Root(_));
+        let browse_root_repo = matches!(self.scope, Scope::Directory(_));
         let config = self.config.clone();
         let sender = self.sender.clone();
         self.projects.clear();
@@ -215,6 +216,7 @@ impl App {
                 &roots,
                 &favorites,
                 include_roots,
+                browse_root_repo,
                 &config,
                 (active_scan, generation),
             )

@@ -10,6 +10,7 @@ pub struct Config {
     pub roots: Vec<PathBuf>,
     pub favorites: Vec<PathBuf>,
     pub max_depth: usize,
+    pub ignore_git_repo_contents: bool,
     pub include_hidden: bool,
     pub focus_created: bool,
     pub max_pane_columns: usize,
@@ -86,6 +87,7 @@ impl Default for Config {
             roots,
             favorites: Vec::new(),
             max_depth: 20,
+            ignore_git_repo_contents: true,
             include_hidden: false,
             focus_created: false,
             max_pane_columns: 2,
@@ -177,6 +179,7 @@ pub fn load(path: &Path) -> io::Result<Config> {
             || value.get("max_pane_columns").is_none()
             || value.get("max_pane_rows").is_none()
             || value.get("discovery_profile").is_none()
+            || value.get("ignore_git_repo_contents").is_none()
             || value.get("rules").is_none()
             || value
                 .pointer("/keybindings/select")

@@ -78,6 +78,8 @@ Edit the existing JSON object to preserve your roots, favorites, and keybindings
 
 Rules match absolute or `~/` paths (with globs), apply to descendants, and resolve by priority. Use priorities of 100 or higher to override defaults or Git ignores. Use a literal include rule to reopen an excluded tree or search a macOS-profile path outside your home directory and `/Users/Shared`.
 
+Discovery stops at Git repositories and linked worktrees by default (`ignore_git_repo_contents: true`). Set it to `false` to include their contents in broad searches. Tab still lets you browse inside a repository while this setting is enabled.
+
 Other settings include `roots`, `favorites`, `max_depth` (20), `include_hidden` (false), `focus_created` (false), and `keybindings` (`toggle_root` defaults to `ctrl+r`). The former `add_root` binding migrates to `toggle_root`; `remove_root` is retired. Adding a root keeps the current scope; removing the active root returns to All. Recent history is stored separately in `recent.json`.
 
 ## Development and releases
