@@ -29,7 +29,7 @@ Reload Herdr with `herdr server reload-config`. With the default prefix, use **C
 
 ## Usage
 
-Type to fuzzy-search project names, paths, and Git branches. Use `/` for an absolute-path prefix or `~/` for a path under your home directory. Switch between **All**, **Favorites**, **Recent**, and configured roots with **Ctrl+G** / **Ctrl+Shift+G** or by clicking a scope.
+Type to fuzzy-search project names, paths, and Git branches. Results appear as directories are scanned by four workers, so you can select a project before discovery finishes. Use `/` for an absolute-path prefix or `~/` for a path under your home directory. Switch between **All**, **Favorites**, **Recent**, and configured roots with **Ctrl+G** / **Ctrl+Shift+G** or by clicking a scope.
 
 - **Enter** creates a new workspace for the highlighted project.
 - **Ctrl+T** opens it in a pane or tab in the current workspace.

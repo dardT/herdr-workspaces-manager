@@ -41,6 +41,11 @@ use unicode_width::UnicodeWidthStr;
 type WorkspacePaths = Vec<(String, PathBuf)>;
 type PreviewResult = (u64, io::Result<WorkspacePaths>);
 
+enum ScanUpdate {
+    Projects(Vec<Project>),
+    Finished(Result<(), String>),
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Picker,
@@ -94,9 +99,10 @@ struct App {
     status: String,
     root_added_notice: Option<String>,
     generation: u64,
+    scanning: bool,
     active_scan: Arc<AtomicU64>,
-    sender: Sender<(u64, Result<Vec<Project>, String>)>,
-    receiver: Receiver<(u64, Result<Vec<Project>, String>)>,
+    sender: Sender<(u64, ScanUpdate)>,
+    receiver: Receiver<(u64, ScanUpdate)>,
     workspace_paths: Option<WorkspacePaths>,
     preview_error: Option<String>,
     preview_generation: u64,
@@ -140,6 +146,7 @@ impl App {
             status: String::new(),
             root_added_notice: None,
             generation: 0,
+            scanning: false,
             active_scan: Arc::new(AtomicU64::new(0)),
             sender,
             receiver,
@@ -208,42 +215,68 @@ impl App {
         let sender = self.sender.clone();
         self.projects.clear();
         self.results.clear();
+        self.scanning = true;
         self.highlighted = 0;
         self.list_state = ListState::default();
         self.status = format!("Scanning {}…", self.scope_name());
         thread::spawn(move || {
-            let results = discovery::discover(
+            let result = discovery::discover(
                 &roots,
                 &favorites,
                 include_roots,
                 browse_root_repo,
                 &config,
                 (active_scan, generation),
-            )
-            .map(|mut results| {
-                if let Some(directory) = scoped_directory {
-                    results.retain(|project| project.path != directory);
-                }
-                results
-            });
-            let _ = sender.send((generation, results));
+                |mut projects| {
+                    if let Some(directory) = &scoped_directory {
+                        projects.retain(|project| &project.path != directory);
+                    }
+                    projects.is_empty()
+                        || sender
+                            .send((generation, ScanUpdate::Projects(projects)))
+                            .is_ok()
+                },
+            );
+            let _ = sender.send((generation, ScanUpdate::Finished(result)));
         });
     }
 
     fn receive(&mut self) -> bool {
         let mut updated = false;
-        while let Ok((generation, projects)) = self.receiver.try_recv() {
+        let selected = self.selected_path();
+        let mut projects_changed = false;
+        let mut scan_error = None;
+        while let Ok((generation, update)) = self.receiver.try_recv() {
             if generation != self.generation {
                 continue;
             }
-            match projects {
-                Ok(projects) => {
-                    self.projects = projects;
-                    self.filter();
+            match update {
+                ScanUpdate::Projects(projects) => {
+                    self.projects.extend(projects);
+                    projects_changed = true;
                 }
-                Err(error) => self.status = format!("Discovery configuration error: {error}"),
+                ScanUpdate::Finished(result) => {
+                    self.scanning = false;
+                    scan_error = result.err();
+                }
             }
             updated = true;
+        }
+        if updated {
+            self.filter();
+            if projects_changed
+                && let Some(selected) = selected
+                && let Some(position) = self
+                    .results
+                    .iter()
+                    .position(|&index| self.projects[index].path == selected)
+            {
+                self.highlighted = position;
+                self.list_state.select(Some(position));
+            }
+            if let Some(error) = scan_error {
+                self.status = format!("Discovery configuration error: {error}");
+            }
         }
         while let Ok((generation, preview)) = self.preview_receiver.try_recv() {
             if generation != self.preview_generation {
@@ -332,9 +365,10 @@ impl App {
         self.list_state
             .select((!self.results.is_empty()).then_some(self.highlighted));
         self.status = format!(
-            "{matches} matches · {} selected · {} indexed · {}",
+            "{matches} matches · {} selected · {} indexed{} · {}",
             self.pending.len(),
             self.projects.len(),
+            if self.scanning { " (scanning…)" } else { "" },
             self.scope_name()
         );
         if let Some(notice) = &self.root_added_notice {

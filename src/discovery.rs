@@ -1,13 +1,13 @@
 use crate::config::{Config, project_path};
 use crate::policy::Policy;
-use ignore::WalkBuilder;
+use ignore::{WalkBuilder, WalkState};
 use std::{
-    collections::HashMap,
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
     sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -73,11 +73,18 @@ pub fn discover(
     browse_root_repo: bool,
     config: &Config,
     generation: (Arc<AtomicU64>, u64),
-) -> Result<Vec<Project>, String> {
-    let mut projects = HashMap::new();
+    mut emit: impl FnMut(Vec<Project>) -> bool + Send,
+) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    let mut batch = Vec::new();
+    let mut last_emit = std::time::Instant::now();
     let policy = Arc::new(Policy::new(config)?);
+    let connected = AtomicBool::new(true);
 
     for root in roots {
+        if generation.0.load(Ordering::Relaxed) != generation.1 {
+            return Ok(());
+        }
         let root = project_path(root);
         if !root.is_dir() {
             continue;
@@ -93,7 +100,8 @@ pub fn discover(
             .git_exclude(false)
             .require_git(false)
             .follow_links(shared_root)
-            .max_depth(Some(config.max_depth));
+            .max_depth(Some(config.max_depth))
+            .threads(4);
         let filter = Arc::clone(&policy);
         let settings = config.clone();
         let stop_at_repos = config.ignore_git_repo_contents && !browse_root_repo;
@@ -109,31 +117,65 @@ pub fn discover(
                                 .parent()
                                 .is_some_and(|parent| parent.join(".git").exists()))))
         });
-        for entry in walker.build().flatten() {
-            if generation.0.load(Ordering::Relaxed) != generation.1 {
-                break;
-            }
-            if !entry.file_type().is_some_and(|kind| kind.is_dir()) {
-                continue;
-            }
-            // Keep the Shared spelling of symlinked directories in search results.
-            let path = project_path(entry.path());
-            if policy.visible(entry.path(), config)
-                && (entry.depth() > 0 || path.join(".git").exists() || include_roots)
-            {
-                projects
-                    .entry(path.clone())
-                    .or_insert_with(|| Project::from_path(path));
-            }
+        let state = Mutex::new((&mut seen, &mut batch, &mut last_emit, &mut emit));
+        walker.build_parallel().run(|| {
+            let policy = Arc::clone(&policy);
+            let state = &state;
+            let connected = &connected;
+            let active = &generation.0;
+            Box::new(move |entry| {
+                if active.load(Ordering::Relaxed) != scan_id || !connected.load(Ordering::Relaxed) {
+                    return WalkState::Quit;
+                }
+                let Ok(entry) = entry else {
+                    return WalkState::Continue;
+                };
+                if !entry.file_type().is_some_and(|kind| kind.is_dir()) {
+                    return WalkState::Continue;
+                }
+                // Keep the Shared spelling of symlinked directories in search results.
+                let path = project_path(entry.path());
+                if policy.visible(entry.path(), config)
+                    && (entry.depth() > 0 || path.join(".git").exists() || include_roots)
+                {
+                    let mut state = state.lock().expect("discovery state poisoned");
+                    let (seen, batch, last_emit, emit) = &mut *state;
+                    if seen.insert(path.clone()) {
+                        batch.push(Project::from_path(path));
+                        if batch.len() >= 64
+                            || last_emit.elapsed() >= std::time::Duration::from_millis(50)
+                        {
+                            if !emit(std::mem::take(batch)) {
+                                connected.store(false, Ordering::Relaxed);
+                                return WalkState::Quit;
+                            }
+                            **last_emit = std::time::Instant::now();
+                        }
+                    }
+                }
+                WalkState::Continue
+            })
+        });
+        if !connected.load(Ordering::Relaxed) {
+            return Ok(());
         }
+    }
+    if generation.0.load(Ordering::Relaxed) != generation.1 {
+        return Ok(());
     }
     for favorite in favorites {
         let path = project_path(favorite);
-        if path.is_dir() {
-            projects.insert(path.clone(), Project::from_path(path));
+        if path.is_dir() && seen.insert(path.clone()) {
+            batch.push(Project::from_path(path));
+            if batch.len() >= 64 && !emit(std::mem::take(&mut batch)) {
+                return Ok(());
+            }
         }
     }
-    Ok(projects.into_values().collect())
+    if !batch.is_empty() {
+        emit(batch);
+    }
+    Ok(())
 }
 
 pub fn basename(path: &Path) -> String {
