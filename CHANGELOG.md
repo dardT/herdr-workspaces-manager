@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.2
+
+### Added
+
+- Stream directory discovery into the picker so projects can be searched and selected before indexing finishes.
+
+### Changed
+
+- Scan directories with four workers, reducing home-directory indexing time while preserving discovery rules and Git repository boundaries.
+
 ## v0.2.1
 
 ### Added
